@@ -9,6 +9,7 @@ import argparse
 import os
 import sys
 import subprocess
+import shutil
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -21,6 +22,10 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 #           "help": "子命令在目录中的一句话说明",
 #           "desc": "子命令的详细说明（-h 时显示）",
 #           "examples": [ "示例命令1", "示例命令2", ... ],
+#           "copy_files": [  # 可选：运行前要复制到当前目录的文件列表（相对 Scripts）
+#               os.path.join("Universal", "template.vasp"),
+#               ...
+#           ],
 #       },
 #       ...
 #   },
@@ -38,6 +43,11 @@ TOOLS = {
                 "leo universal substitute POSCAR POSCAR_new Al Sc 0.25 --seed 42",
                 "leo universal substitute POSCAR POSCAR_new Al Sc 10 --mode count",
             ],
+            # 示例（先注释着，等你真的有需要再填实际文件）
+            # "copy_files": [
+            #     os.path.join("Universal", "template.vasp"),
+            #     os.path.join("Universal", "default_config.yaml"),
+            # ],
         },
         "super": {
             "script": os.path.join("Universal", "VASP2SUPER-X.py"),
@@ -58,6 +68,23 @@ TOOLS = {
             "examples": [
                 "leo nep plot",
             ],
+            # 需要的话可以这样加：
+            # "copy_files": [
+            #     os.path.join("NEP", "palette.json"),
+            #     os.path.join("NEP", "style.yaml"),
+            # ],
+        },
+        "single": {
+            "script": os.path.join("NEP", "Xyz2poscar.py"),
+            "help": "绘制 NEP 训练结果",
+            "desc": "封装 NEP/Xyz2poscar.py，用于绘制计算微扰生成的结构单点能。",
+            "examples": [
+                "leo nep single dump.xyz --order Cu In P S",
+            ],
+        "copy_files": [
+            os.path.join("NEP", f)
+            for f in ["INCAR_Single_point", "KPOINTS", "run.sh"]
+        ],
         },
     },
 }
@@ -65,11 +92,30 @@ TOOLS = {
 
 # ===================== 2. 通用运行函数 =====================
 
-def run_script(script_rel_path, extra_args):
-    """调用某个子脚本，参数原样透传"""
+def run_script(script_rel_path, extra_args, copy_files=None):
+    """
+    调用某个子脚本：
+      1) 如有需要，先把 copy_files 里的文件复制到当前目录
+      2) 然后以当前 Python 解释器运行脚本
+    """
+    # 1) 复制依赖文件
+    if copy_files:
+        for file_rel in copy_files:
+            src = os.path.join(BASE_DIR, file_rel)
+            dst = os.path.join(os.getcwd(), os.path.basename(file_rel))
+            try:
+                if not os.path.exists(src):
+                    print(f"[Leo] ⚠ 需要复制的文件不存在: {src}")
+                    continue
+                # 如果目标已经存在，可以根据喜好选择是否覆盖，这里选择覆盖
+                shutil.copy(src, dst)
+                print(f"[Leo] ✅ 已复制: {src}  →  {dst}")
+            except Exception as e:
+                print(f"[Leo] ⚠ 复制文件时出错: {src} → {dst} | {e}")
+
+    # 2) 运行脚本
     script_path = os.path.join(BASE_DIR, script_rel_path)
     cmd = [sys.executable, script_path] + extra_args
-    # 把控制权交给子脚本（它自己处理 -h 等）
     subprocess.run(cmd, check=True)
 
 
@@ -82,11 +128,9 @@ def build_overview():
     # 颜文字猫猫头 Banner
     lines.append("┌──────────────────────────────────────────────┐")
     lines.append("│   /\\_/\\                                       │")
-    lines.append("│  ( o.o )   <  喵~ 这里是 Leo 的工具箱！        │")
+    lines.append("│  ( o.o )   <  Miao！        │")
     lines.append("│   > ^ <                                       │")
     lines.append("└──────────────────────────────────────────────┘")
-    lines.append("")
-
     lines.append("【command】")
 
     for group_name, cmds in TOOLS.items():
@@ -158,10 +202,12 @@ def build_parser():
                 help="后面所有参数会原样传递给对应脚本（保持与原脚本用法一致）。",
             )
 
-            # 绑定执行函数
+            # 绑定执行函数（注意用默认参数避免 lambda 晚绑定坑）
             script_rel = info["script"]
+            copy_files = info.get("copy_files", None)
             p.set_defaults(
-                func=lambda ns, script_rel=script_rel: run_script(script_rel, ns.args)
+                func=lambda ns, script_rel=script_rel, copy_files=copy_files:
+                    run_script(script_rel, ns.args, copy_files)
             )
 
     return parser
