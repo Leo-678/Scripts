@@ -3,11 +3,6 @@
 
 """
 Leo：个人脚本统一入口
-
-用法示例：
-    leo universal substitute POSCAR POSCAR_new Al Sc 0.25
-    leo universal substitute POSCAR POSCAR_new Al Sc 0.25 --seed 42
-    leo universal substitute POSCAR POSCAR_new Al Sc 10 --mode count
 """
 
 import argparse
@@ -20,8 +15,8 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # ===================== 1. 在这里配置所有脚本 =====================
 # 结构：
 # TOOLS = {
-#   "组名": {
-#       "命令名": {
+#   "组名(group)": {
+#       "命令名(command)": {
 #           "script": "相对 Scripts 的路径",
 #           "help": "子命令在目录中的一句话说明",
 #           "desc": "子命令的详细说明（-h 时显示）",
@@ -53,17 +48,20 @@ TOOLS = {
             ],
         },
     },
-########################################## NEP
-    "NEP": {
+
+    # NEP 相关工具
+    "nep": {
         "plot": {
             "script": os.path.join("NEP", "NEP-plot.py"),
-            "help": "绘制NEP的训练结果",
-            "desc": "封装 NEP/NEP-plot.py，用于绘制NEP的训练结果。",
+            "help": "绘制 NEP 训练结果",
+            "desc": "封装 NEP/NEP-plot.py，用于绘制 NEP 的训练损失、误差等结果。",
             "examples": [
-                "leo nep-plot",
+                "leo nep plot",
             ],
         },
+    },
 }
+
 
 # ===================== 2. 通用运行函数 =====================
 
@@ -75,19 +73,56 @@ def run_script(script_rel_path, extra_args):
     subprocess.run(cmd, check=True)
 
 
-# ===================== 3. 构建命令行解析 =====================
+# ===================== 3. 顶部猫猫头 + 总览文本 =====================
+
+def build_overview():
+    """构建你想要的顶层输出（猫猫头 + command 总览）"""
+    lines = []
+
+    # 颜文字猫猫头 Banner
+    lines.append("┌──────────────────────────────────────────────┐")
+    lines.append("│   /\\_/\\                                       │")
+    lines.append("│  ( o.o )   <  喵~ 这里是 Leo 的工具箱！        │")
+    lines.append("│   > ^ <                                       │")
+    lines.append("└──────────────────────────────────────────────┘")
+    lines.append("")
+
+    lines.append("【command】")
+
+    for group_name, cmds in TOOLS.items():
+        lines.append(f"  组 {group_name}:")
+        for cmd_name, info in cmds.items():
+            help_txt = info.get("help", "")
+            examples = info.get("examples", [])
+            # 只展示第一个 example，保持简洁
+            if examples:
+                example_line = f"       example: {examples[0]}"
+            else:
+                example_line = ""
+            lines.append(f"    {group_name} {cmd_name}  -  {help_txt}")
+            if example_line:
+                lines.append(example_line)
+        lines.append("")  # 分组之间空一行
+
+    return "\n".join(lines)
+
+
+# ===================== 4. 构建命令行解析 =====================
 
 def build_parser():
+    """构建 argparse 的 parser，但顶层展示用我们自己的 overview"""
     parser = argparse.ArgumentParser(
         prog="leo",
-        description="Leo：个人 VASP/MD/后处理 脚本统一命令入口",
+        description="",  # 顶层我们自己打印 overview，就不靠 argparse 的 description 了
+        add_help=True,
+        formatter_class=argparse.RawTextHelpFormatter,
     )
 
     group_parsers = parser.add_subparsers(
-        title="脚本分组",
+        title="脚本分组（group）",
         dest="group",
         metavar="group",
-        help="先选择一个分组，再选择分组中的具体工具",
+        help="例如：leo universal substitute ... 或 leo nep plot ...",
     )
 
     # 按照 TOOLS 自动创建分组和子命令
@@ -113,12 +148,14 @@ def build_parser():
                 help=info.get("help", ""),
                 description=desc,
                 add_help=True,
+                formatter_class=argparse.RawTextHelpFormatter,
             )
+
             # 所有后续参数原样传给子脚本
             p.add_argument(
                 "args",
                 nargs=argparse.REMAINDER,
-                help="后面所有参数会原样传递给对应脚本。",
+                help="后面所有参数会原样传递给对应脚本（保持与原脚本用法一致）。",
             )
 
             # 绑定执行函数
@@ -130,11 +167,14 @@ def build_parser():
     return parser
 
 
+# ===================== 5. 主入口 =====================
+
 def main():
     parser = build_parser()
 
+    # 直接 `python Leo.py` / `leo` 时，只打印猫猫头 + command 总览
     if len(sys.argv) == 1:
-        parser.print_help()
+        print(build_overview())
         sys.exit(0)
 
     args = parser.parse_args()
@@ -142,7 +182,8 @@ def main():
     if hasattr(args, "func"):
         args.func(args)
     else:
-        parser.print_help()
+        # 参数不完整或没匹配到命令时，也打印总览
+        print(build_overview())
 
 
 if __name__ == "__main__":
