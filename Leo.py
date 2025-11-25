@@ -49,12 +49,28 @@ TOOLS = {
             #     os.path.join("Universal", "default_config.yaml"),
             # ],
         },
-        "super": {
-            "script": os.path.join("Universal", "VASP2SUPER-X.py"),
+        "replicate": {
+            "script": os.path.join("Universal", "POSCAR2SUPER-X.py"),
             "help": "VASP 结构生成超胞",
-            "desc": "封装 Universal/VASP2SUPER-X.py，用于将 VASP 结构扩展为超胞。",
+            "desc": "封装 Universal/POSCAR2SUPER-X.py，用于将 VASP 结构扩展为超胞。",
             "examples": [
-                "leo universal super POSCAR POSCAR_2x2x2 --super 2 2 2",
+                "leo universal replicate POSCAR -r 2 2 2 -f lammps-data",
+            ],
+            "copy_files": [
+                os.path.join("NEP", f)
+                for f in ["POSCAR2SUPER-X.py"]
+            ],
+        },
+        "vacancy": {
+            "script": os.path.join("Universal", "POS-Remove.py"),
+            "help": "VASP 结构生成超胞",
+            "desc": "封装 Universal/POS-Remove.py，用于删掉POSCAR原子",
+            "examples": [
+                "leo universal vacancy In 10 POSCAR",
+            ],
+            "copy_files": [
+                os.path.join("NEP", f)
+                for f in ["POS-Remove.py"]
             ],
         },
     },
@@ -83,9 +99,21 @@ TOOLS = {
             ],
         "copy_files": [
             os.path.join("NEP", f)
-            for f in ["INCAR_Single_point", "KPOINTS", "run.sh"]
+            for f in ["INCAR_Single_point", "KPOINTS", "run.sh","Outcars2xyz.sh"]
         ],
         },
+        "split": {
+            "script": os.path.join("NEP", "Exyz-random-select.py"),
+            "help": "绘制 NEP 训练结果",
+            "desc": "封装 NEP/Exyz-random-select.py，按比例分开训练集和测试级",
+            "examples": [
+                "leo nep split total.xyz 0.9",
+            ],
+        "copy_files": [
+            os.path.join("NEP", f)
+            for f in ["Exyz-random-select.py"]
+        ],
+        },        
     },
 }
 
@@ -122,31 +150,47 @@ def run_script(script_rel_path, extra_args, copy_files=None):
 # ===================== 3. 顶部猫猫头 + 总览文本 =====================
 
 def build_overview():
-    """构建你想要的顶层输出（猫猫头 + command 总览）"""
+    """猫猫头 + 一行一个完整命令示例的总览（命令和说明对齐）"""
     lines = []
 
-    # 颜文字猫猫头 Banner
+    # 猫猫头 Banner
     lines.append("┌──────────────────────────────────────────────┐")
     lines.append("│   /\\_/\\                                       │")
-    lines.append("│  ( o.o )   <  Miao！        │")
+    lines.append("│  ( o.o )   <  Miao!                           │")
     lines.append("│   > ^ <                                       │")
     lines.append("└──────────────────────────────────────────────┘")
     lines.append("【command】")
 
+    # 1) 先收集所有“示例命令字符串”，用来算最大长度
+    all_cmd_strs = []
     for group_name, cmds in TOOLS.items():
-        lines.append(f"  组 {group_name}:")
+        for cmd_name, info in cmds.items():
+            examples = info.get("examples", [])
+            if examples:
+                cmd_str = examples[0]
+            else:
+                cmd_str = f"leo {group_name} {cmd_name}"
+            all_cmd_strs.append(cmd_str)
+
+    max_len = max(len(s) for s in all_cmd_strs)
+
+    # 2) 再按组打印，每条命令把左边命令部分补到同样长度
+    for group_name, cmds in TOOLS.items():
+        lines.append(f"组 {group_name}:")
         for cmd_name, info in cmds.items():
             help_txt = info.get("help", "")
             examples = info.get("examples", [])
-            # 只展示第一个 example，保持简洁
+
             if examples:
-                example_line = f"       example: {examples[0]}"
+                cmd_str = examples[0]
             else:
-                example_line = ""
-            lines.append(f"    {group_name} {cmd_name}  -  {help_txt}")
-            if example_line:
-                lines.append(example_line)
-        lines.append("")  # 分组之间空一行
+                cmd_str = f"leo {group_name} {cmd_name}"
+
+            # 左侧命令补空格到 max_len，这样竖线就会对齐
+            padded = cmd_str.ljust(max_len)
+            lines.append(f"  {padded} |  {help_txt}")
+
+        lines.append("")  # 组之间空一行
 
     return "\n".join(lines)
 
