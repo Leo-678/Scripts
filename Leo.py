@@ -73,6 +73,18 @@ TOOLS = {
                 for f in ["POS-Remove.py"]
             ],
         },
+        "LAMMPS2EXYZ": {
+            "script": os.path.join("Universal", "LAMMPS2EXYZ.py"),
+            "help": "Convert LAMMPS dump to Exyz",
+            "desc": "封装 Universal/POS-Remove.py，用于删掉POSCAR原子",
+            "examples": [
+                "leo LAMMPS2EXYZ dump.xyz --type-map 1:Al,2:N,3:Sc --out dd.exyz",
+            ],
+            "copy_files": [
+                os.path.join("NEP", f)
+                for f in ["POS-Remove.py"]
+            ],
+        },
     },
 
     # NEP 相关工具
@@ -141,9 +153,23 @@ TOOLS = {
             #     os.path.join("NEP", "palette.json"),
             #     os.path.join("NEP", "style.yaml"),
             # ],
-        },           
+        },        
+        "rdf": {
+            "script": os.path.join("MD", "RDF.py"),
+            "help": "rdf",
+            "desc": "封装 MD/LAMMPS-Plot.py，用于处理。",
+            "examples": [
+                "leo MD rdf dump.xyz --fmt lammps --mode avg --cutoff 6 --bins 150",
+            ],
+            # 需要的话可以这样加：
+            # "copy_files": [
+            #     os.path.join("NEP", "palette.json"),
+            #     os.path.join("NEP", "style.yaml"),
+            # ],
+        },          
         },
 }
+
 
 
 # ===================== 2. 通用运行函数 =====================
