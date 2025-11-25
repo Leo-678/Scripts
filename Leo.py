@@ -115,6 +115,34 @@ TOOLS = {
         ],
         },        
     },
+    "MD": {
+        "pdos": {
+            "script": os.path.join("MD", "PDOS.py"),
+            "help": "绘制 NEP 训练结果",
+            "desc": "封装 MD/PDOS.py，用于处理。",
+            "examples": [
+                "leo MD pdos dump.velo  --ninitial 30 --corlength-steps 5000 --ngap-steps 200 --tfreq 10 --dt 0.001 --omaga-max 25 --max-omega-points 1500",
+            ],
+            # 需要的话可以这样加：
+            # "copy_files": [
+            #     os.path.join("NEP", "palette.json"),
+            #     os.path.join("NEP", "style.yaml"),
+            # ],
+        },     
+        "plt": {
+            "script": os.path.join("MD", "LAMMPS-Plot.py"),
+            "help": "绘制 NEP 训练结果",
+            "desc": "封装 MD/LAMMPS-Plot.py，用于处理。",
+            "examples": [
+                "leo MD plt log.lammps",
+            ],
+            # 需要的话可以这样加：
+            # "copy_files": [
+            #     os.path.join("NEP", "palette.json"),
+            #     os.path.join("NEP", "style.yaml"),
+            # ],
+        },           
+        },
 }
 
 
