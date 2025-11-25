@@ -36,7 +36,7 @@ TOOLS = {
     "universal": {
         "substitute": {
             "script": os.path.join("Universal", "Substitute-POSCAR.py"),
-            "help": "在 POSCAR 中随机替换元素",
+            "help": "Substitute atoms in POSCAR",
             "desc": "封装 Universal/Substitute-POSCAR.py，用于在 POSCAR 中随机替换元素。",
             "examples": [
                 "leo universal substitute POSCAR POSCAR_new Al Sc 0.25",
@@ -51,7 +51,7 @@ TOOLS = {
         },
         "replicate": {
             "script": os.path.join("Universal", "POSCAR2SUPER-X.py"),
-            "help": "VASP 结构生成超胞",
+            "help": "Replicate POSCAR & convert format",
             "desc": "封装 Universal/POSCAR2SUPER-X.py，用于将 VASP 结构扩展为超胞。",
             "examples": [
                 "leo universal replicate POSCAR -r 2 2 2 -f lammps-data",
@@ -63,7 +63,7 @@ TOOLS = {
         },
         "vacancy": {
             "script": os.path.join("Universal", "POS-Remove.py"),
-            "help": "VASP 结构生成超胞",
+            "help": "Reproduce vacancy in POSCAR",
             "desc": "封装 Universal/POS-Remove.py，用于删掉POSCAR原子",
             "examples": [
                 "leo universal vacancy In 10 POSCAR",
@@ -79,7 +79,7 @@ TOOLS = {
     "nep": {
         "plot": {
             "script": os.path.join("NEP", "NEP-plot.py"),
-            "help": "绘制 NEP 训练结果",
+            "help": "Plot NEP training results",
             "desc": "封装 NEP/NEP-plot.py，用于绘制 NEP 的训练损失、误差等结果。",
             "examples": [
                 "leo nep plot",
@@ -92,7 +92,7 @@ TOOLS = {
         },
         "single": {
             "script": os.path.join("NEP", "Xyz2poscar.py"),
-            "help": "绘制 NEP 训练结果",
+            "help": "Single point related calculations",
             "desc": "封装 NEP/Xyz2poscar.py，用于绘制计算微扰生成的结构单点能。",
             "examples": [
                 "leo nep single dump.xyz --order Cu In P S",
@@ -104,7 +104,7 @@ TOOLS = {
         },
         "split": {
             "script": os.path.join("NEP", "Exyz-random-select.py"),
-            "help": "绘制 NEP 训练结果",
+            "help": "Split training data",
             "desc": "封装 NEP/Exyz-random-select.py，按比例分开训练集和测试级",
             "examples": [
                 "leo nep split total.xyz 0.9",
@@ -118,10 +118,10 @@ TOOLS = {
     "MD": {
         "pdos": {
             "script": os.path.join("MD", "PDOS.py"),
-            "help": "绘制 NEP 训练结果",
+            "help": "PDOS",
             "desc": "封装 MD/PDOS.py，用于处理。",
             "examples": [
-                "leo MD pdos dump.velo  --ninitial 30 --corlength-steps 5000 --ngap-steps 200 --tfreq 10 --dt 0.001 --omaga-max 25 --max-omega-points 1500",
+                "leo MD pdos dump.velo",
             ],
             # 需要的话可以这样加：
             # "copy_files": [
@@ -131,7 +131,7 @@ TOOLS = {
         },     
         "plt": {
             "script": os.path.join("MD", "LAMMPS-Plot.py"),
-            "help": "绘制 NEP 训练结果",
+            "help": "MD-lammps process parameters",
             "desc": "封装 MD/LAMMPS-Plot.py，用于处理。",
             "examples": [
                 "leo MD plt log.lammps",
