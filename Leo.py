@@ -88,12 +88,12 @@ TOOLS = {
                 for f in ["POS-Remove.py"]
             ],
         },
-        "LAMMPS2EXYZ": {
+        "LMP2XYZ": {
             "script": os.path.join("Universal", "LAMMPS2EXYZ.py"),
             "help": "Convert LAMMPS dump to extxyz",
             "desc": "封装 Universal/LAMMPS2EXYZ.py，将 LAMMPS dump 转换为 extxyz。",
             "examples": [
-                "leo universal LAMMPS2EXYZ dump.xyz --type-map 1:Al,2:N,3:Sc --out dd.exyz",
+                "leo universal LMP2XYZ dump.xyz --type-map 1:Al,2:N",
             ],
         },
     },
@@ -228,10 +228,20 @@ def build_overview():
     """猫猫头 + 一行一个完整命令示例的总览（命令和说明对齐）"""
     lines = []
 
+    # 计算内部宽度（当前边框字符串长度是 49，去掉左右边框 2 个字符）
+    inner_width = 49 - 2
+    last_git = get_git_last_update()
+    # 构造一行：last git update: YYYY-MM-DD
+    update_str = f"last git update: {last_git}"
+    if len(update_str) > inner_width:
+        update_str = update_str[:inner_width]
+
     # 猫猫头 Banner
     lines.append("┌──────────────────────────────────────────────┐")
     lines.append("│   /\\_/\\                                       │")
     lines.append("│  ( o.o )   <  Miao!                           │")
+    # 新增一行更新时间
+    lines.append("│" + update_str.ljust(inner_width) + "│")
     lines.append("│   > ^ <                                       │")
     lines.append("└──────────────────────────────────────────────┘")
     lines.append("【command】")
