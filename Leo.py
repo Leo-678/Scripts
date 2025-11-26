@@ -15,7 +15,7 @@ import os
 import sys
 import subprocess
 import shutil
-
+from datetime import datetime
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # ===================== 1. 在这里配置所有脚本 =====================
@@ -190,6 +190,22 @@ def run_script(script_rel_path, extra_args, copy_files=None):
     cmd = [sys.executable, script_path] + extra_args
     subprocess.run(cmd, check=True)
 
+def get_git_last_update():
+    """
+    返回 git 仓库的最后一次提交时间（short 格式），
+    如果不是 git 仓库或出错，返回 'unknown'。
+    """
+    try:
+        out = subprocess.check_output(
+            ["git", "-C", BASE_DIR, "log", "-1", "--format=%cd", "--date=short"],
+            stderr=subprocess.DEVNULL,
+            text=True,
+        ).strip()
+        if not out:
+            return "unknown"
+        return out   # 例如 '2025-11-26'
+    except Exception:
+        return "unknown"
 
 def run_update(branch="main"):
     """
