@@ -58,12 +58,10 @@ TOOLS = {
     "universal": {
         "substitute": {
             "script": os.path.join("Universal", "Substitute-POSCAR.py"),
-            "help": "Substitute atoms in POSCAR",
+            "help": "Substitute POSCAR Elements",
             "desc": "封装 Universal/Substitute-POSCAR.py，用于在 POSCAR 中随机替换元素。",
             "examples": [
                 "leo universal substitute POSCAR POSCAR_new Al Sc 0.25",
-                "leo universal substitute POSCAR POSCAR_new Al Sc 0.25 --seed 42",
-                "leo universal substitute POSCAR POSCAR_new Al Sc 10 --mode count",
             ],
         },
         "replicate": {
@@ -158,7 +156,7 @@ TOOLS = {
             "help": "Compute RDF g(r)",
             "desc": "封装 MD/RDF.py，用于从 XDATCAR 或 LAMMPS dump 计算总 RDF 以及分类型 RDF。",
             "examples": [
-                "leo MD rdf dump.xyz --fmt lammps --type-map 1:Cu,2:Se,3:Ag",
+                "leo MD rdf dump.xyz --fmt lammps --type-map 1:Cu,2:Se",
             ],
         },
     },
