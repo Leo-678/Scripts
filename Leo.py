@@ -1,8 +1,13 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-# update git pull origin main
+# leo main entry
+
 """
 Leo：个人脚本统一入口
+
+新增命令：
+    leo update
+用于将本地 Scripts 仓库硬重置到远程 origin/main（全部替换本地修改，慎用）。
 """
 
 import argparse
@@ -33,6 +38,23 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # }
 
 TOOLS = {
+    # 专门的系统工具组，目前只有 update
+    "system": {
+        "update": {
+            "script": None,
+            "help": "Update Leo scripts from GitHub (HARD reset)",
+            "desc": (
+                "将当前 Scripts 仓库硬重置到 origin/main：\n"
+                "  git fetch origin\n"
+                "  git reset --hard origin/main\n"
+                "会丢弃本地未提交修改，请谨慎使用。"
+            ),
+            "examples": [
+                "leo update",
+            ],
+        },
+    },
+
     "universal": {
         "substitute": {
             "script": os.path.join("Universal", "Substitute-POSCAR.py"),
@@ -43,16 +65,11 @@ TOOLS = {
                 "leo universal substitute POSCAR POSCAR_new Al Sc 0.25 --seed 42",
                 "leo universal substitute POSCAR POSCAR_new Al Sc 10 --mode count",
             ],
-            # 示例（先注释着，等你真的有需要再填实际文件）
-            # "copy_files": [
-            #     os.path.join("Universal", "template.vasp"),
-            #     os.path.join("Universal", "default_config.yaml"),
-            # ],
         },
         "replicate": {
             "script": os.path.join("Universal", "POSCAR2SUPER-X.py"),
             "help": "Replicate POSCAR & convert format",
-            "desc": "封装 Universal/POSCAR2SUPER-X.py，用于将 VASP 结构扩展为超胞。",
+            "desc": "封装 Universal/POSCAR2SUPER-X.py，用于将 VASP 结构扩展为超胞，并可输出多种格式。",
             "examples": [
                 "leo universal replicate POSCAR -r 2 2 2 -f lammps-data",
             ],
@@ -63,8 +80,8 @@ TOOLS = {
         },
         "vacancy": {
             "script": os.path.join("Universal", "POS-Remove.py"),
-            "help": "Reproduce vacancy in POSCAR",
-            "desc": "封装 Universal/POS-Remove.py，用于删掉POSCAR原子",
+            "help": "Make vacancy in POSCAR",
+            "desc": "封装 Universal/POS-Remove.py，用于删掉 POSCAR 中指定元素/编号的原子。",
             "examples": [
                 "leo universal vacancy In 10 POSCAR",
             ],
@@ -75,14 +92,10 @@ TOOLS = {
         },
         "LAMMPS2EXYZ": {
             "script": os.path.join("Universal", "LAMMPS2EXYZ.py"),
-            "help": "Convert LAMMPS dump to Exyz",
-            "desc": "封装 Universal/POS-Remove.py，用于删掉POSCAR原子",
+            "help": "Convert LAMMPS dump to extxyz",
+            "desc": "封装 Universal/LAMMPS2EXYZ.py，将 LAMMPS dump 转换为 extxyz。",
             "examples": [
-                "leo LAMMPS2EXYZ dump.xyz --type-map 1:Al,2:N,3:Sc --out dd.exyz",
-            ],
-            "copy_files": [
-                os.path.join("NEP", f)
-                for f in ["POS-Remove.py"]
+                "leo universal LAMMPS2EXYZ dump.xyz --type-map 1:Al,2:N,3:Sc --out dd.exyz",
             ],
         },
     },
@@ -92,84 +105,64 @@ TOOLS = {
         "plot": {
             "script": os.path.join("NEP", "NEP-plot.py"),
             "help": "Plot NEP training results",
-            "desc": "封装 NEP/NEP-plot.py，用于绘制 NEP 的训练损失、误差等结果。",
+            "desc": "封装 NEP/NEP-plot.py，用于绘制 NEP 的训练损失、力误差等结果。",
             "examples": [
                 "leo nep plot",
             ],
-            # 需要的话可以这样加：
-            # "copy_files": [
-            #     os.path.join("NEP", "palette.json"),
-            #     os.path.join("NEP", "style.yaml"),
-            # ],
         },
         "single": {
             "script": os.path.join("NEP", "Xyz2poscar.py"),
-            "help": "Single point related calculations",
-            "desc": "封装 NEP/Xyz2poscar.py，用于绘制计算微扰生成的结构单点能。",
+            "help": "Generate VASP single-point inputs from NEP data",
+            "desc": "封装 NEP/Xyz2poscar.py，用于从 NEP 结构生成 VASP 单点能计算输入，并打包脚本。",
             "examples": [
                 "leo nep single dump.xyz --order Cu In P S",
             ],
-        "copy_files": [
-            os.path.join("NEP", f)
-            for f in ["INCAR_Single_point", "KPOINTS", "run.sh","Outcars2xyz.sh"]
-        ],
+            "copy_files": [
+                os.path.join("NEP", f)
+                for f in ["INCAR_Single_point", "KPOINTS", "run.sh", "Outcars2xyz.sh"]
+            ],
         },
         "split": {
             "script": os.path.join("NEP", "Exyz-random-select.py"),
-            "help": "Split training data",
-            "desc": "封装 NEP/Exyz-random-select.py，按比例分开训练集和测试级",
+            "help": "Split training/test exyz",
+            "desc": "封装 NEP/Exyz-random-select.py，按比例分开训练集和测试集。",
             "examples": [
                 "leo nep split total.xyz 0.9",
             ],
-        "copy_files": [
-            os.path.join("NEP", f)
-            for f in ["Exyz-random-select.py"]
-        ],
-        },        
+            "copy_files": [
+                os.path.join("NEP", f)
+                for f in ["Exyz-random-select.py"]
+            ],
+        },
     },
+
     "MD": {
         "pdos": {
             "script": os.path.join("MD", "PDOS.py"),
-            "help": "PDOS",
-            "desc": "封装 MD/PDOS.py，用于处理。",
+            "help": "Compute VACF + PDOS from velocities",
+            "desc": "封装 MD/PDOS.py，用于从 LAMMPS 速度 dump 计算 VACF 和 PDOS。",
             "examples": [
-                "leo MD pdos dump.velo",
+                "leo MD pdos dump.velo --ninitial 30 --corlength-steps 5000",
             ],
-            # 需要的话可以这样加：
-            # "copy_files": [
-            #     os.path.join("NEP", "palette.json"),
-            #     os.path.join("NEP", "style.yaml"),
-            # ],
-        },     
+        },
         "plt": {
             "script": os.path.join("MD", "LAMMPS-Plot.py"),
-            "help": "MD-lammps process parameters",
-            "desc": "封装 MD/LAMMPS-Plot.py，用于处理。",
+            "help": "Plot LAMMPS thermo (step, T, P, E, cell…)",
+            "desc": "封装 MD/LAMMPS-Plot.py，用于绘制 LAMMPS log 中的温度、压强、能量、晶格等随步长变化曲线。",
             "examples": [
                 "leo MD plt log.lammps",
             ],
-            # 需要的话可以这样加：
-            # "copy_files": [
-            #     os.path.join("NEP", "palette.json"),
-            #     os.path.join("NEP", "style.yaml"),
-            # ],
-        },        
+        },
         "rdf": {
             "script": os.path.join("MD", "RDF.py"),
-            "help": "rdf",
-            "desc": "封装 MD/LAMMPS-Plot.py，用于处理。",
+            "help": "Compute RDF g(r)",
+            "desc": "封装 MD/RDF.py，用于从 XDATCAR 或 LAMMPS dump 计算总 RDF 以及分类型 RDF。",
             "examples": [
-                "leo MD rdf dump.xyz --fmt lammps --mode avg --cutoff 6 --bins 150",
+                "leo MD rdf dump.xyz --fmt lammps --type-map 1:Cu,2:Se,3:Ag",
             ],
-            # 需要的话可以这样加：
-            # "copy_files": [
-            #     os.path.join("NEP", "palette.json"),
-            #     os.path.join("NEP", "style.yaml"),
-            # ],
-        },          
         },
+    },
 }
-
 
 
 # ===================== 2. 通用运行函数 =====================
@@ -189,7 +182,6 @@ def run_script(script_rel_path, extra_args, copy_files=None):
                 if not os.path.exists(src):
                     print(f"[Leo] ⚠ 需要复制的文件不存在: {src}")
                     continue
-                # 如果目标已经存在，可以根据喜好选择是否覆盖，这里选择覆盖
                 shutil.copy(src, dst)
                 print(f"[Leo] ✅ 已复制: {src}  →  {dst}")
             except Exception as e:
@@ -199,6 +191,37 @@ def run_script(script_rel_path, extra_args, copy_files=None):
     script_path = os.path.join(BASE_DIR, script_rel_path)
     cmd = [sys.executable, script_path] + extra_args
     subprocess.run(cmd, check=True)
+
+
+def run_update(branch="main"):
+    """
+    强制更新当前 Leo Scripts 仓库：
+        git fetch origin
+        git reset --hard origin/<branch>
+
+    相当于“全部替换”为远程 main 分支内容，会丢弃本地未提交修改。
+    """
+    repo_dir = BASE_DIR
+    git_dir = os.path.join(repo_dir, ".git")
+
+    if not os.path.isdir(git_dir):
+        print("[Leo] 当前目录不是 git 仓库，无法执行 leo update。")
+        return
+
+    print(f"[Leo] ⚠ 注意：即将把本地仓库硬重置为 origin/{branch}，本地未提交修改将丢失。")
+    try:
+        subprocess.run(
+            ["git", "-C", repo_dir, "fetch", "origin"],
+            check=True,
+        )
+        subprocess.run(
+            ["git", "-C", repo_dir, "reset", "--hard", f"origin/{branch}"],
+            check=True,
+        )
+        print(f"[Leo] ✅ 已成功重置到 origin/{branch}。")
+    except subprocess.CalledProcessError as e:
+        print("[Leo] ❌ 更新失败，请检查网络或远程分支是否存在。")
+        print("      详细错误：", e)
 
 
 # ===================== 3. 顶部猫猫头 + 总览文本 =====================
@@ -215,7 +238,7 @@ def build_overview():
     lines.append("└──────────────────────────────────────────────┘")
     lines.append("【command】")
 
-    # 1) 先收集所有“示例命令字符串”，用来算最大长度
+    # 收集所有“示例命令字符串”，用来算最大长度
     all_cmd_strs = []
     for group_name, cmds in TOOLS.items():
         for cmd_name, info in cmds.items():
@@ -226,9 +249,9 @@ def build_overview():
                 cmd_str = f"leo {group_name} {cmd_name}"
             all_cmd_strs.append(cmd_str)
 
-    max_len = max(len(s) for s in all_cmd_strs)
+    max_len = max(len(s) for s in all_cmd_strs) if all_cmd_strs else 0
 
-    # 2) 再按组打印，每条命令把左边命令部分补到同样长度
+    # 再按组打印，每条命令把左边命令部分补到同样长度
     for group_name, cmds in TOOLS.items():
         lines.append(f"组 {group_name}:")
         for cmd_name, info in cmds.items():
@@ -240,7 +263,6 @@ def build_overview():
             else:
                 cmd_str = f"leo {group_name} {cmd_name}"
 
-            # 左侧命令补空格到 max_len，这样竖线就会对齐
             padded = cmd_str.ljust(max_len)
             lines.append(f"  {padded} |  {help_txt}")
 
@@ -255,7 +277,7 @@ def build_parser():
     """构建 argparse 的 parser，但顶层展示用我们自己的 overview"""
     parser = argparse.ArgumentParser(
         prog="leo",
-        description="",  # 顶层我们自己打印 overview，就不靠 argparse 的 description 了
+        description="",
         add_help=True,
         formatter_class=argparse.RawTextHelpFormatter,
     )
@@ -280,6 +302,18 @@ def build_parser():
         )
 
         for cmd_name, info in cmds.items():
+            # 对 system/update 做特殊处理：不调用 run_script，而是 run_update
+            if group_name == "system" and cmd_name == "update":
+                p = subparsers.add_parser(
+                    cmd_name,
+                    help=info.get("help", ""),
+                    description=info.get("desc", ""),
+                    add_help=True,
+                    formatter_class=argparse.RawTextHelpFormatter,
+                )
+                p.set_defaults(func=lambda ns: run_update())
+                continue
+
             desc = info.get("desc", info.get("help", ""))
             examples = info.get("examples", [])
             if examples:

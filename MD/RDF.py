@@ -10,6 +10,7 @@ Supports:
 - outputs total + partial RDFs
 - 2-column subplot layout
 - output RDFs to ONE txt file (Format A)
+python RDF.py wrapped-1.traj --fmt lammps --mode avg --cutoff 10 --bins 150 --type-map 1:Cu,2:Se,3:Ag --avg-frac 0.5 1.0
 """
 
 import numpy as np
@@ -94,72 +95,79 @@ def read_xdatcar(xfile):
 # =========================================================
 # Read LAMMPS dump (your exact format)
 # =========================================================
-def read_lammps_all_frames(dfile):
-    with open(dfile, "r") as f:
-        lines = [l.strip() for l in f.readlines()]
-
+def read_lammps_all_frames(path):
+    """读取 LAMMPS dump，自动识别 2 列(lo/hi) 或 3 列(含 xy xz yz) box 格式"""
     frames = []
+    with open(path, "r") as f:
+        lines = f.readlines()
+
     i = 0
-    n = len(lines)
-    while i < n:
+    N = len(lines)
+    while i < N:
+        # TIMESTEP
         if not lines[i].startswith("ITEM: TIMESTEP"):
             i += 1
             continue
-        # timestep
-        i += 1
-        ts = int(lines[i])
-        i += 1
+        step = int(lines[i+1].strip())
 
-        if not lines[i].startswith("ITEM: NUMBER OF ATOMS"):
-            raise RuntimeError("Missing NUMBER OF ATOMS")
-        i += 1
-        N = int(lines[i])
-        i += 1
+        # NUMBER OF ATOMS
+        if not lines[i+2].startswith("ITEM: NUMBER OF ATOMS"):
+            raise RuntimeError("Missing 'ITEM: NUMBER OF ATOMS'")
+        natoms = int(lines[i+3].strip())
 
-        if not lines[i].startswith("ITEM: BOX BOUNDS"):
-            raise RuntimeError("Missing BOX BOUNDS")
-        i += 1
-        xlo, xhi, _ = [float(x) for x in lines[i].split()]
-        i += 1
-        ylo, yhi, _ = [float(x) for x in lines[i].split()]
-        i += 1
-        zlo, zhi, _ = [float(x) for x in lines[i].split()]
-        i += 1
+        # BOX BOUNDS
+        if not lines[i+4].startswith("ITEM: BOX BOUNDS"):
+            raise RuntimeError("Missing 'ITEM: BOX BOUNDS'")
 
-        ax = np.array([xhi - xlo, 0, 0])
-        by = np.array([0, yhi - ylo, 0])
-        cz = np.array([0, 0, zhi - zlo])
-        lattice = np.vstack([ax, by, cz])
-        volume = abs(np.linalg.det(lattice))
+        box = []
+        for j in range(3):
+            parts = lines[i+5+j].split()
+            if len(parts) == 2:
+                # lo hi
+                lo, hi = map(float, parts)
+                tilt = 0.0
+            elif len(parts) == 3:
+                # lo hi tilt
+                lo, hi, tilt = map(float, parts)
+            else:
+                raise RuntimeError(f"BOX line format error: {parts}")
+            box.append((lo, hi, tilt))
 
-        if not lines[i].startswith("ITEM: ATOMS"):
-            raise RuntimeError("Missing ATOMS")
-        header = lines[i].split()[2:]
-        i += 1
+        # 构建正交盒（RDF 不关心倾斜，直接用长方体即可）
+        ax = np.array([box[0][1] - box[0][0], 0.0, 0.0])
+        by = np.array([0.0, box[1][1] - box[1][0], 0.0])
+        cz = np.array([0.0, 0.0, box[2][1] - box[2][0]])
+        cell = np.vstack([ax, by, cz])
+        vol = float(abs(np.linalg.det(cell)))
 
-        cmap = {h: idx for idx, h in enumerate(header)}
-        if "type" not in cmap:
-            raise RuntimeError("type column missing")
-        if "x" not in cmap or "y" not in cmap or "z" not in cmap:
-            raise RuntimeError("x y z missing")
+        # ATOMS
+        if not lines[i+8].startswith("ITEM: ATOMS"):
+            raise RuntimeError("Missing 'ITEM: ATOMS'")
+        header = lines[i+8].split()[2:]
+        col = {h: k for k, h in enumerate(header)}
+        if "type" not in col:
+            raise RuntimeError("Missing type column")
 
-        rows = [lines[i + j].split() for j in range(N)]
-        i += N
+        X = []
+        T = []
+        for k in range(natoms):
+            parts = lines[i+9+k].split()
+            T.append(int(parts[col["type"]]))
+            X.append([float(parts[col[c]]) for c in ("x", "y", "z")])
+        X = np.array(X, float)
+        T = np.array(T, int)
 
-        types = np.array([int(r[cmap["type"]]) for r in rows])
-        pos = np.array([[float(r[cmap["x"]]),
-                         float(r[cmap["y"]]),
-                         float(r[cmap["z"]])] for r in rows])
+        # 平移到 box 原点
+        X[:, 0] -= box[0][0]
+        X[:, 1] -= box[1][0]
+        X[:, 2] -= box[2][0]
 
-        # shift to 0 origin
-        pos[:, 0] -= xlo
-        pos[:, 1] -= ylo
-        pos[:, 2] -= zlo
+        # ✅ 这里一次性返回 4 个量：pos, typ, cell, vol
+        frames.append((X, T, cell, vol))
 
-        frames.append((pos, types, lattice, volume))
+        i += 9 + natoms
 
     return frames
-
 
 # =========================================================
 # pairwise distances
@@ -229,8 +237,8 @@ def main():
     ap.add_argument("--type-map", required=False,
                     help="e.g. 1:Al,2:N,3:Sc")
     ap.add_argument("--mode", choices=["avg"], default="avg")
-    ap.add_argument("--avg-frac", nargs=2, type=float, default=[0.9, 1.0])
-    ap.add_argument("--cutoff", type=float, default=None)
+    ap.add_argument("--avg-frac", nargs=2, type=float, default=[0.8, 1.0])
+    ap.add_argument("--cutoff", type=float, default=6)
     ap.add_argument("--bins", type=int, default=300)
     ap.add_argument("--smooth", choices=["off", "moving", "gaussian"],
                     default="off")
