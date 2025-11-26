@@ -192,18 +192,18 @@ def run_script(script_rel_path, extra_args, copy_files=None):
 
 def get_git_last_update():
     """
-    返回 git 仓库的最后一次提交时间（short 格式），
-    如果不是 git 仓库或出错，返回 'unknown'。
+    返回 git 仓库最后一次提交时间（YYYY-MM-DD HH:MM:SS）。
+    若失败，则返回 'unknown'。
     """
     try:
         out = subprocess.check_output(
-            ["git", "-C", BASE_DIR, "log", "-1", "--format=%cd", "--date=short"],
+            ["git", "-C", BASE_DIR, "log", "-1", "--format=%cd", "--date=iso"],
             stderr=subprocess.DEVNULL,
             text=True,
         ).strip()
-        if not out:
-            return "unknown"
-        return out   # 例如 '2025-11-26'
+        # iso 格式示例： "2025-01-03 14:57:21 +0800"
+        # 只保留前 19 字符： "2025-01-03 14:57:21"
+        return out[:19] if len(out) >= 19 else out
     except Exception:
         return "unknown"
 
