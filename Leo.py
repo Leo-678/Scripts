@@ -50,7 +50,7 @@ TOOLS = {
                 "会丢弃本地未提交修改，请谨慎使用。"
             ),
             "examples": [
-                "leo update",
+                "leo system update",
             ],
         },
     },
