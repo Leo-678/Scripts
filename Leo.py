@@ -6,7 +6,7 @@
 Leo：个人脚本统一入口
 
 新增命令：
-    leo update
+    leo system update
 用于将本地 Scripts 仓库硬重置到远程 origin/main（全部替换本地修改，慎用）。
 """
 
@@ -16,16 +16,25 @@ import sys
 import subprocess
 import shutil
 from datetime import datetime
+
+
+# ======================================================================
+# 0. 全局常量
+# ======================================================================
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# ===================== 1. 在这里配置所有脚本 =====================
+
+# ======================================================================
+# 1. 这里配置所有脚本（工具表 TOOLS）
+#
 # 结构：
 # TOOLS = {
 #   "组名(group)": {
 #       "命令名(command)": {
 #           "script": "相对 Scripts 的路径",
-#           "help": "子命令在目录中的一句话说明",
-#           "desc": "子命令的详细说明（-h 时显示）",
+#           "help": "子命令的一句话说明（在总览和 help 中显示）",
+#           "desc": "子命令的详细说明（子命令 -h 时显示）",
 #           "examples": [ "示例命令1", "示例命令2", ... ],
 #           "copy_files": [  # 可选：运行前要复制到当前目录的文件列表（相对 Scripts）
 #               os.path.join("Universal", "template.vasp"),
@@ -36,9 +45,10 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 #   },
 #   ...
 # }
+# ======================================================================
 
 TOOLS = {
-    # 专门的系统工具组，目前只有 update
+    # ---------------- system 组：Leo 自身维护相关 ----------------
     "system": {
         "update": {
             "script": None,
@@ -47,6 +57,7 @@ TOOLS = {
                 "将当前 Scripts 仓库硬重置到 origin/main：\n"
                 "  git fetch origin\n"
                 "  git reset --hard origin/main\n"
+                "\n"
                 "会丢弃本地未提交修改，请谨慎使用。"
             ),
             "examples": [
@@ -55,27 +66,33 @@ TOOLS = {
         },
     },
 
+    # ---------------- universal 组：通用结构处理 ----------------
     "universal": {
         "substitute": {
             "script": os.path.join("Universal", "Substitute-POSCAR.py"),
-            "help": "Substitute POSCAR Elements",
+            "help": "Substitute POSCAR elements",
             "desc": "封装 Universal/Substitute-POSCAR.py，用于在 POSCAR 中随机替换元素。",
             "examples": [
                 "leo universal substitute POSCAR POSCAR_new Al Sc 0.25",
             ],
         },
+
         "replicate": {
             "script": os.path.join("Universal", "POSCAR2SUPER-X.py"),
             "help": "Replicate POSCAR & convert format",
-            "desc": "封装 Universal/POSCAR2SUPER-X.py，用于将 VASP 结构扩展为超胞，并可输出多种格式。",
+            "desc": (
+                "封装 Universal/POSCAR2SUPER-X.py，用于将 VASP 结构扩展为超胞，"
+                "并可输出多种格式（如 lammps-data）。"
+            ),
             "examples": [
                 "leo universal replicate POSCAR -r 2 2 2 -f lammps-data",
             ],
+            # 一般不需要复制自身脚本，这里预留即可，未来可放模板文件
             "copy_files": [
-                os.path.join("NEP", f)
-                for f in ["POSCAR2SUPER-X.py"]
+                os.path.join("Universal", "POSCAR2SUPER-X.py"),
             ],
         },
+
         "vacancy": {
             "script": os.path.join("Universal", "POS-Remove.py"),
             "help": "Make vacancy in POSCAR",
@@ -84,10 +101,10 @@ TOOLS = {
                 "leo universal vacancy In 10 POSCAR",
             ],
             "copy_files": [
-                os.path.join("NEP", f)
-                for f in ["POS-Remove.py"]
+                os.path.join("Universal", "POS-Remove.py"),
             ],
         },
+
         "LMP2XYZ": {
             "script": os.path.join("Universal", "LAMMPS2EXYZ.py"),
             "help": "Convert LAMMPS dump to extxyz",
@@ -98,7 +115,7 @@ TOOLS = {
         },
     },
 
-    # NEP 相关工具
+    # ---------------- nep 组：NEP 势场相关工具 ----------------
     "nep": {
         "plot": {
             "script": os.path.join("NEP", "NEP-plot.py"),
@@ -108,10 +125,14 @@ TOOLS = {
                 "leo nep plot",
             ],
         },
+
         "single": {
             "script": os.path.join("NEP", "Xyz2poscar.py"),
             "help": "Generate VASP single-point inputs from NEP data",
-            "desc": "封装 NEP/Xyz2poscar.py，用于从 NEP 结构生成 VASP 单点能计算输入，并打包脚本。",
+            "desc": (
+                "封装 NEP/Xyz2poscar.py，用于从 NEP 结构生成 VASP 单点能输入，"
+                "并可复制 INCAR/KPOINTS/run.sh 等辅助脚本。"
+            ),
             "examples": [
                 "leo nep single dump.xyz --order Cu In P S",
             ],
@@ -120,6 +141,7 @@ TOOLS = {
                 for f in ["INCAR_Single_point", "KPOINTS", "run.sh", "Outcars2xyz.sh"]
             ],
         },
+
         "split": {
             "script": os.path.join("NEP", "Exyz-random-select.py"),
             "help": "Split training/test exyz",
@@ -128,12 +150,12 @@ TOOLS = {
                 "leo nep split total.xyz 0.9",
             ],
             "copy_files": [
-                os.path.join("NEP", f)
-                for f in ["Exyz-random-select.py"]
+                os.path.join("NEP", "Exyz-random-select.py"),
             ],
         },
     },
 
+    # ---------------- MD 组：分子动力学后处理 ----------------
     "MD": {
         "pdos": {
             "script": os.path.join("MD", "PDOS.py"),
@@ -143,26 +165,35 @@ TOOLS = {
                 "leo MD pdos dump.velo --ninitial 30 --corlength-steps 5000",
             ],
         },
+
         "plt": {
             "script": os.path.join("MD", "LAMMPS-Plot.py"),
             "help": "Plot LAMMPS thermo (step, T, P, E, cell…)",
-            "desc": "封装 MD/LAMMPS-Plot.py，用于绘制 LAMMPS log 中的温度、压强、能量、晶格等随步长变化曲线。",
+            "desc": (
+                "封装 MD/LAMMPS-Plot.py，用于绘制 LAMMPS log 中的温度、压强、"
+                "能量、晶格等随步长变化的曲线。"
+            ),
             "examples": [
                 "leo MD plt log.lammps",
             ],
         },
+
         "plt-gpu": {
             "script": os.path.join("MD", "GPUMD-plot.py"),
-            "help": "Plot GPUMD thermo (step, T, P, E, cell…)",
-            "desc": "封装 MD/LAMMPS-Plot.py，用于绘制 LAMMPS log 中的温度、压强、能量、晶格等随步长变化曲线。",
+            "help": "Plot GPUMD thermo (T, K, U, P, cell…)",
+            "desc": (
+                "封装 MD/GPUMD-plot.py，用于绘制 GPUMD 的 thermo.out 中的 "
+                "温度、能量、应力、晶格等曲线。"
+            ),
             "examples": [
                 "leo MD plt-gpu",
             ],
         },
+
         "rdf": {
             "script": os.path.join("MD", "RDF.py"),
             "help": "Compute RDF g(r)",
-            "desc": "封装 MD/RDF.py，用于从 XDATCAR 或 LAMMPS dump 计算总 RDF 以及分类型 RDF。",
+            "desc": "封装 MD/RDF.py，用于从 XDATCAR 或 LAMMPS dump 计算总 RDF 以及按类型分解的 RDF。",
             "examples": [
                 "leo MD rdf dump.xyz --fmt lammps --type-map 1:Cu,2:Se",
             ],
@@ -171,7 +202,9 @@ TOOLS = {
 }
 
 
-# ===================== 2. 通用运行函数 =====================
+# ======================================================================
+# 2. 通用运行函数
+# ======================================================================
 
 def run_script(script_rel_path, extra_args, copy_files=None):
     """
@@ -198,6 +231,7 @@ def run_script(script_rel_path, extra_args, copy_files=None):
     cmd = [sys.executable, script_path] + extra_args
     subprocess.run(cmd, check=True)
 
+
 def get_git_last_update():
     """
     返回 git 仓库最后一次提交时间（YYYY-MM-DD HH:MM:SS）。
@@ -209,11 +243,12 @@ def get_git_last_update():
             stderr=subprocess.DEVNULL,
             text=True,
         ).strip()
-        # iso 格式示例： "2025-01-03 14:57:21 +0800"
-        # 只保留前 19 字符： "2025-01-03 14:57:21"
+        # iso 示例："2025-01-03 14:57:21 +0800"
+        # 只保留前 19 字符："2025-01-03 14:57:21"
         return out[:19] if len(out) >= 19 else out
     except Exception:
         return "unknown"
+
 
 def run_update(branch="main"):
     """
@@ -227,7 +262,7 @@ def run_update(branch="main"):
     git_dir = os.path.join(repo_dir, ".git")
 
     if not os.path.isdir(git_dir):
-        print("[Leo] 当前目录不是 git 仓库，无法执行 leo update。")
+        print("[Leo] 当前目录不是 git 仓库，无法执行 leo system update。")
         return
 
     print(f"[Leo] ⚠ 注意：即将把本地仓库硬重置为 origin/{branch}，本地未提交修改将丢失。")
@@ -246,16 +281,19 @@ def run_update(branch="main"):
         print("      详细错误：", e)
 
 
-# ===================== 3. 顶部猫猫头 + 总览文本 =====================
+# ======================================================================
+# 3. 顶部猫猫头 + 总览文本
+# ======================================================================
 
 def build_overview():
-    """猫猫头 + 一行一个完整命令示例的总览（命令和说明对齐）"""
+    """
+    猫猫头 + 一行一个完整命令示例的总览（命令和说明对齐）
+    """
     lines = []
 
     # 计算内部宽度（当前边框字符串长度是 49，去掉左右边框 2 个字符）
     inner_width = 49 - 2
     last_git = get_git_last_update()
-    # 构造一行：last git update: YYYY-MM-DD
     update_str = f"last git update: {last_git}"
     if len(update_str) > inner_width:
         update_str = update_str[:inner_width]
@@ -264,7 +302,6 @@ def build_overview():
     lines.append("┌──────────────────────────────────────────────┐")
     lines.append("│   /\\_/\\                                       │")
     lines.append("│  ( o.o )   <  Miao!                           │")
-    # 新增一行更新时间
     lines.append("│" + update_str.ljust(inner_width) + "│")
     lines.append("│   > ^ <                                       │")
     lines.append("└──────────────────────────────────────────────┘")
@@ -303,10 +340,14 @@ def build_overview():
     return "\n".join(lines)
 
 
-# ===================== 4. 构建命令行解析 =====================
+# ======================================================================
+# 4. 构建命令行解析（argparse）
+# ======================================================================
 
 def build_parser():
-    """构建 argparse 的 parser，但顶层展示用我们自己的 overview"""
+    """
+    构建 argparse 的 parser，但顶层展示用我们自己的 overview。
+    """
     parser = argparse.ArgumentParser(
         prog="leo",
         description="",
@@ -334,7 +375,7 @@ def build_parser():
         )
 
         for cmd_name, info in cmds.items():
-            # 对 system/update 做特殊处理：不调用 run_script，而是 run_update
+            # system/update 做特殊处理：不调用 run_script，而是 run_update
             if group_name == "system" and cmd_name == "update":
                 p = subparsers.add_parser(
                     cmd_name,
@@ -377,12 +418,14 @@ def build_parser():
     return parser
 
 
-# ===================== 5. 主入口 =====================
+# ======================================================================
+# 5. 主入口
+# ======================================================================
 
 def main():
     parser = build_parser()
 
-    # 直接 `python Leo.py` / `leo` 时，只打印猫猫头 + command 总览
+    # 直接 `leo` 时，只打印猫猫头 + command 总览
     if len(sys.argv) == 1:
         print(build_overview())
         sys.exit(0)
