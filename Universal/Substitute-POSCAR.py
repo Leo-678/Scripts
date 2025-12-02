@@ -12,9 +12,7 @@ Features:
 - Preserves lattice, Selective dynamics flags, and coordinate system.
 
 Usage examples:
-    python substitute_poscar.py POSCAR POSCAR_new Al Sc 0.25
-    python substitute_poscar.py POSCAR POSCAR_new Al Sc 0.25 --seed 42
-    python substitute_poscar.py POSCAR POSCAR_new Al Sc 10 --mode count
+python Substitute-POSCAR.py POSCAR_origin POSCAR Al Sc 0.2
 """
 
 import argparse

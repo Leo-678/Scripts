@@ -151,6 +151,14 @@ TOOLS = {
                 "leo MD plt log.lammps",
             ],
         },
+        "plt-gpu": {
+            "script": os.path.join("MD", "GPUMD-plot.py"),
+            "help": "Plot GPUMD thermo (step, T, P, E, cell…)",
+            "desc": "封装 MD/LAMMPS-Plot.py，用于绘制 LAMMPS log 中的温度、压强、能量、晶格等随步长变化曲线。",
+            "examples": [
+                "leo MD plt-gpu",
+            ],
+        },
         "rdf": {
             "script": os.path.join("MD", "RDF.py"),
             "help": "Compute RDF g(r)",
