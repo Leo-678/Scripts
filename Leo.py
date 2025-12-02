@@ -52,7 +52,7 @@ TOOLS = {
     "system": {
         "update": {
             "script": None,
-            "help": "Update Leo scripts from GitHub (HARD reset)",
+            "help": "Update",
             "desc": (
                 "将当前 Scripts 仓库硬重置到 origin/main：\n"
                 "  git fetch origin\n"
@@ -168,7 +168,7 @@ TOOLS = {
 
         "plt": {
             "script": os.path.join("MD", "LAMMPS-Plot.py"),
-            "help": "Plot LAMMPS thermo (step, T, P, E, cell…)",
+            "help": "Plot LAMMPS thermo",
             "desc": (
                 "封装 MD/LAMMPS-Plot.py，用于绘制 LAMMPS log 中的温度、压强、"
                 "能量、晶格等随步长变化的曲线。"
@@ -180,7 +180,7 @@ TOOLS = {
 
         "plt-gpu": {
             "script": os.path.join("MD", "GPUMD-plot.py"),
-            "help": "Plot GPUMD thermo (T, K, U, P, cell…)",
+            "help": "Plot GPUMD thermo",
             "desc": (
                 "封装 MD/GPUMD-plot.py，用于绘制 GPUMD 的 thermo.out 中的 "
                 "温度、能量、应力、晶格等曲线。"
@@ -287,58 +287,66 @@ def run_update(branch="main"):
 
 def build_overview():
     """
-    猫猫头 + 一行一个完整命令示例的总览（命令和说明对齐）
+    猫猫头 + 居中组标题 + 两列对齐命令列表
     """
+
+    import shutil
+    term_width = shutil.get_terminal_size((80, 20)).columns
+    # 安全宽度
+    term_width = max(term_width, 60)
+
     lines = []
 
-    # 计算内部宽度（当前边框字符串长度是 49，去掉左右边框 2 个字符）
+    # ==== 猫猫头 ====
     inner_width = 49 - 2
     last_git = get_git_last_update()
     update_str = f"last git update: {last_git}"
     if len(update_str) > inner_width:
         update_str = update_str[:inner_width]
 
-    # 猫猫头 Banner
-    lines.append("┌──────────────────────────────────────────────┐")
-    lines.append("│   /\\_/\\                                       │")
-    lines.append("│  ( o.o )   <  Miao!                           │")
-    lines.append("│" + update_str.ljust(inner_width) + "│")
-    lines.append("│   > ^ <                                       │")
-    lines.append("└──────────────────────────────────────────────┘")
-    lines.append("【command】")
+    lines += [
+        "┌──────────────────────────────────────────────┐",
+        "│   /\\_/\\                                       │",
+        "│  ( o.o )   <  Miao!                           │",
+        "│" + update_str.ljust(inner_width) + "│",
+        "│   > ^ <                                       │",
+        "└──────────────────────────────────────────────┘",
+        "【command】",
+    ]
 
-    # 收集所有“示例命令字符串”，用来算最大长度
-    all_cmd_strs = []
-    for group_name, cmds in TOOLS.items():
+    # ==== 收集所有命令用于对齐宽度 ====
+    all_cmds = []
+    for group, cmds in TOOLS.items():
         for cmd_name, info in cmds.items():
-            examples = info.get("examples", [])
-            if examples:
-                cmd_str = examples[0]
-            else:
-                cmd_str = f"leo {group_name} {cmd_name}"
-            all_cmd_strs.append(cmd_str)
+            example = info.get("examples", [])
+            cmd_str = example[0] if example else f"leo {group} {cmd_name}"
+            all_cmds.append(cmd_str)
 
-    max_len = max(len(s) for s in all_cmd_strs) if all_cmd_strs else 0
+    max_cmd_width = max(len(s) for s in all_cmds)
 
-    # 再按组打印，每条命令把左边命令部分补到同样长度
+    # ==== 按组打印 ====
     for group_name, cmds in TOOLS.items():
-        lines.append(f"组 {group_name}:")
+
+        # -------------------------
+        # ★ 居中标题：------- group -------
+        # -------------------------
+        title = f" {group_name} "
+        left = (term_width - len(title)) // 2
+        right = term_width - len(title) - left
+        lines.append("-" * left + title + "-" * right)
+
+        # ---- 组内命令 ----
         for cmd_name, info in cmds.items():
             help_txt = info.get("help", "")
-            examples = info.get("examples", [])
+            example = info.get("examples", [])
+            cmd_str = example[0] if example else f"leo {group_name} {cmd_name}"
 
-            if examples:
-                cmd_str = examples[0]
-            else:
-                cmd_str = f"leo {group_name} {cmd_name}"
+            padded = cmd_str.ljust(max_cmd_width)
+            lines.append(f"  {padded}  |  {help_txt}")
 
-            padded = cmd_str.ljust(max_len)
-            lines.append(f"  {padded} |  {help_txt}")
-
-        lines.append("")  # 组之间空一行
+        lines.append("")  # 分组之间空行
 
     return "\n".join(lines)
-
 
 # ======================================================================
 # 4. 构建命令行解析（argparse）
