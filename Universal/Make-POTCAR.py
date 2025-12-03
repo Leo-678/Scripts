@@ -27,13 +27,15 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
         description=(
             "Merge element POTCAR files from a VASP pseudopotential library.\n"
             "Provide element names first and the POTCAR library directory last;"
-            " or pass --poscar to read the element order from POSCAR."
+            " or pass --poscar to read the element order from POSCAR.\n"
+            "You can also point to the POTCAR directory explicitly with --library."
         ),
         epilog=(
             "示例：\n"
             "  python Make-POTCAR.py Ag H.25 /path/to/PBE\n"
             "  python Make-POTCAR.py O Si C /data/potcar/PBE\n"
-            "  python Make-POTCAR.py --poscar POSCAR /path/to/PBE"
+            "  python Make-POTCAR.py --poscar POSCAR /path/to/PBE\n"
+            "  python Make-POTCAR.py --poscar POSCAR --library /data/potcar/PBE"
         ),
         formatter_class=argparse.RawTextHelpFormatter,
     )
@@ -44,6 +46,11 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
             "元素名称列表，最后一个参数为 POTCAR 库所在目录；"
             "若使用 --poscar，可仅提供 POTCAR 库目录。"
         ),
+    )
+    parser.add_argument(
+        "-l",
+        "--library",
+        help="显式指定 POTCAR 库目录，可替代位置参数中的目录。",
     )
     parser.add_argument(
         "-o",
@@ -115,23 +122,36 @@ def parse_poscar_elements(poscar_path: str) -> List[str]:
 
 def main(argv: List[str]) -> None:
     args = parse_args(argv)
+    base_dir_arg = args.library
+    if args.items:
+        # If library is not specified, assume the last positional item is the library directory.
+        # Otherwise, treat all positional items as elements.
+        if args.library:
+            elements_from_items = args.items
+        else:
+            elements_from_items = args.items[:-1]
+            base_dir_arg = args.items[-1]
+    else:
+        elements_from_items = []
+
     if args.poscar:
-        if not args.items:
+        if args.items and args.library:
+            raise SystemExit("使用 --poscar 且指定 --library 时，不需要再提供位置参数。")
+        if base_dir_arg is None:
             raise SystemExit(
                 "使用 --poscar 时需要提供 POTCAR 库目录，例如：python Make-POTCAR.py --poscar POSCAR /path/to/PBE"
             )
-        if len(args.items) > 1:
-            raise SystemExit("使用 --poscar 时只需提供一个 POTCAR 库目录，不需要再列元素。")
 
         elements = parse_poscar_elements(args.poscar)
-        base_dir = ensure_dir_exists(args.items[-1])
     else:
-        if len(args.items) < 2:
+        elements = elements_from_items
+        if not elements:
             raise SystemExit("需要至少一个元素名和一个 POTCAR 目录，例如：Ag H.25 /path/to/PBE")
 
-        elements = args.items[:-1]
-        base_dir = ensure_dir_exists(args.items[-1])
+    if base_dir_arg is None:
+        raise SystemExit("需要提供 POTCAR 库目录，例如：Ag H.25 /path/to/PBE 或使用 --library 指定。")
 
+    base_dir = ensure_dir_exists(base_dir_arg)
     merge_potcars(base_dir, elements, args.output)
 
 
