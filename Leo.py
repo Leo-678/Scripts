@@ -113,6 +113,18 @@ TOOLS = {
                 "leo universal LMP2XYZ dump.xyz --type-map 1:Al,2:N",
             ],
         },
+
+        "potcar": {
+            "script": os.path.join("Universal", "Make-POTCAR.py"),
+            "help": "Merge POTCAR by element order",
+            "desc": (
+                "封装 Universal/Make-POTCAR.py，将 POTCAR 库中指定元素的 POTCAR 依次合并。\n"
+                "命令格式：元素1 元素2 ... POTCAR库目录（目录作为最后一个参数）。"
+            ),
+            "examples": [
+                "leo universal potcar Ag H.25 /path/to/PBE",
+            ],
+        },
     },
 
     # ---------------- nep 组：NEP 势场相关工具 ----------------
