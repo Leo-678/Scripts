@@ -37,7 +37,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 #           "desc": "子命令的详细说明（子命令 -h 时显示）",
 #           "examples": [ "示例命令1", "示例命令2", ... ],
 #           "copy_files": [  # 可选：运行前要复制到当前目录的文件列表（相对 Scripts）
-#               os.path.join("Universal", "template.vasp"),
+#               os.path.join("univer", "template.vasp"),
 #               ...
 #           ],
 #       },
@@ -66,63 +66,63 @@ TOOLS = {
         },
     },
 
-    # ---------------- universal 组：通用结构处理 ----------------
-    "universal": {
+    # ---------------- univer 组：通用结构处理 ----------------
+    "univer": {
         "substitute": {
-            "script": os.path.join("Universal", "Substitute-POSCAR.py"),
+            "script": os.path.join("univer", "Substitute-POSCAR.py"),
             "help": "Substitute POSCAR elements",
-            "desc": "封装 Universal/Substitute-POSCAR.py，用于在 POSCAR 中随机替换元素。",
+            "desc": "封装 univer/Substitute-POSCAR.py，用于在 POSCAR 中随机替换元素。",
             "examples": [
-                "leo universal substitute POSCAR POSCAR_new Al Sc 0.25",
+                "leo univer substitute POSCAR POSCAR_new Al Sc 0.25",
             ],
         },
 
         "replicate": {
-            "script": os.path.join("Universal", "POSCAR2SUPER-X.py"),
+            "script": os.path.join("univer", "POSCAR2SUPER-X.py"),
             "help": "Replicate POSCAR & convert format",
             "desc": (
-                "封装 Universal/POSCAR2SUPER-X.py，用于将 VASP 结构扩展为超胞，"
+                "封装 univer/POSCAR2SUPER-X.py，用于将 VASP 结构扩展为超胞，"
                 "并可输出多种格式（如 lammps-data）。"
             ),
             "examples": [
-                "leo universal replicate POSCAR -r 2 2 2 -f lammps-data",
+                "leo univer replicate POSCAR -r 2 2 2 -f lammps-data",
             ],
             # 一般不需要复制自身脚本，这里预留即可，未来可放模板文件
             "copy_files": [
-                os.path.join("Universal", "POSCAR2SUPER-X.py"),
+                os.path.join("univer", "POSCAR2SUPER-X.py"),
             ],
         },
 
         "vacancy": {
-            "script": os.path.join("Universal", "POS-Remove.py"),
+            "script": os.path.join("univer", "POS-Remove.py"),
             "help": "Make vacancy in POSCAR",
-            "desc": "封装 Universal/POS-Remove.py，用于删掉 POSCAR 中指定元素/编号的原子。",
+            "desc": "封装 univer/POS-Remove.py，用于删掉 POSCAR 中指定元素/编号的原子。",
             "examples": [
-                "leo universal vacancy In 10 POSCAR",
+                "leo univer vacancy In 10 POSCAR",
             ],
             "copy_files": [
-                os.path.join("Universal", "POS-Remove.py"),
+                os.path.join("univer", "POS-Remove.py"),
             ],
         },
 
         "LMP2XYZ": {
-            "script": os.path.join("Universal", "LAMMPS2EXYZ.py"),
+            "script": os.path.join("univer", "LAMMPS2EXYZ.py"),
             "help": "Convert LAMMPS dump to extxyz",
-            "desc": "封装 Universal/LAMMPS2EXYZ.py，将 LAMMPS dump 转换为 extxyz。",
+            "desc": "封装 univer/LAMMPS2EXYZ.py，将 LAMMPS dump 转换为 extxyz。",
             "examples": [
-                "leo universal LMP2XYZ dump.xyz --type-map 1:Al,2:N",
+                "leo univer LMP2XYZ dump.xyz --type-map 1:Al,2:N",
             ],
         },
 
         "potcar": {
-            "script": os.path.join("Universal", "Make-POTCAR.py"),
+            "script": os.path.join("univer", "Make-POTCAR.py"),
             "help": "Merge POTCAR by element order",
             "desc": (
-                "封装 Universal/Make-POTCAR.py，将 POTCAR 库中指定元素的 POTCAR 依次合并。\n"
+                "封装 univer/Make-POTCAR.py，将 POTCAR 库中指定元素的 POTCAR 依次合并。\n"
                 "命令格式：元素1 元素2 ... POTCAR库目录（目录作为最后一个参数）。"
             ),
             "examples": [
-                "leo universal potcar Ag H.25 /path/to/PBE",
+                "leo univer potcar Ag H.25 /path/to/PBE",
             ],
         },
     },
@@ -140,7 +140,7 @@ TOOLS = {
 
         "single": {
             "script": os.path.join("NEP", "Xyz2poscar.py"),
-            "help": "Generate VASP single-point inputs from NEP data",
+            "help": "Generate VASP single-point",
             "desc": (
                 "封装 NEP/Xyz2poscar.py，用于从 NEP 结构生成 VASP 单点能输入，"
                 "并可复制 INCAR/KPOINTS/run.sh 等辅助脚本。"
@@ -379,7 +379,7 @@ def build_parser():
         title="脚本分组（group）",
         dest="group",
         metavar="group",
-        help="例如：leo universal substitute ... 或 leo nep plot ...",
+        help="例如：leo univer substitute ... 或 leo nep plot ...",
     )
 
     # 按照 TOOLS 自动创建分组和子命令
