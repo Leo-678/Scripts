@@ -1,0 +1,53 @@
+#   LAMMPS Input Script for MD Simulation
+# ------------------------------- Variables --------------------------------
+variable    TBEG        equal   1000.0        # Initial temperature (K)
+variable    TEND        equal   1000.0        # Final temperature (K)
+variable    dt          equal   0.001         # Timestep (ps)
+variable    Nequi       equal   1000000       # Steps for equilibration
+variable    Nprod       equal   1000000       # Steps for production
+variable    ndump       equal   1000          # Dump  during production
+variable    ntherm      equal   1000          # Thermo output stride
+variable    seed        equal   677677        # Random seed for velocity
+# --------------------------- Units & Styles -------------------------------
+units           metal
+dimension       3
+boundary        p p p
+atom_style      atomic
+newton          on                            # efficiency test
+# ------------------------------ Structure ---------------------------------
+read_data       input.pos
+#replicate       ${n_x} ${n_y} ${n_z}
+# ------------------------------ Potential ---------------------------------
+pair_style      nep nep.txt
+pair_coeff      * * 
+# --------------------------- Neighbor Settings ----------------------------
+neighbor        2 bin
+neigh_modify    every 10 delay 0 check yes   # For normal solid runs
+# --- Alternative for Superionic Conductors ---
+#neighbor        2.5 bin
+#neigh_modify    every 1 delay 0 check yes   # For fast ion diffusion
+# ------------------------------ Timestep ----------------------------------
+timestep        ${dt}
+# --------------------------- Thermo & Output ------------------------------
+thermo          ${ntherm}
+thermo_style custom step temp press pxx pyy pzz pe ke enthalpy etotal vol cella cellb cellc  cellalpha cellbeta cellgamma
+# --------------------------- Varible & Output -----------------------------
+# ---------------------------- Initialization ------------------------------
+fix             remove all momentum 100 linear 1 1 1     # Remove COM drift
+# ----------------------- Minimization (Optional) --------------------------
+minimize        1e-8 1e-10 1000 10000
+shell           date +%s > seed.txt
+variable        seedfile file seed.txt
+variable        seed     equal v_seedfile
+velocity        all create ${TBEG} ${seed} mom yes rot yes dist gaussian
+# --------------------------- Equilibration --------------------------------
+fix             nptFix all npt temp ${TBEG} ${TEND} $(100.0*dt) iso 0 0 1000
+run             ${Nequi}
+unfix           nptFix
+# --------------------------- Production -----------------------------------
+compute         1 all msd
+fix             nvtFix all nvt temp ${TBEG} ${TEND} $(100.0*dt)
+dump            trj all custom ${ndump} md.traj id type x y z
+dump_modify     trj sort id
+run             ${Nprod}
+unfix           nvtFix

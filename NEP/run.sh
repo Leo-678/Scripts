@@ -7,7 +7,7 @@ for (( i=START; i<=END; i++ )); do
 
     # 使用数字 i 作为目录名
     mkdir -p "$i"
-    cp "$file" "$i/POSCAR"
+    mv "$file" "$i/POSCAR"
     cp POTCAR INCAR KPOINTS "$i/"
     (
       cd "$i"

@@ -137,7 +137,14 @@ TOOLS = {
                 "leo nep plot",
             ],
         },
-
+        "select": {
+            "script": os.path.join("NEP", "NEP-select.py"),
+            "help": "NEP select structure",
+            "desc": "封装 NEP/NEP-plot.py，用于绘制 NEP 的训练损失、力误差等结果。",
+            "examples": [
+                "leo nep select sample.xyz train.xyz nep.txt",
+            ],
+        },
         "single": {
             "script": os.path.join("NEP", "Xyz2poscar.py"),
             "help": "Generate VASP single-point",
