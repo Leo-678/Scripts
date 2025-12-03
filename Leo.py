@@ -37,7 +37,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 #           "desc": "子命令的详细说明（子命令 -h 时显示）",
 #           "examples": [ "示例命令1", "示例命令2", ... ],
 #           "copy_files": [  # 可选：运行前要复制到当前目录的文件列表（相对 Scripts）
-#               os.path.join("univer", "template.vasp"),
+#               os.path.join("Univer", "template.vasp"),
 #               ...
 #           ],
 #       },
@@ -66,63 +66,63 @@ TOOLS = {
         },
     },
 
-    # ---------------- univer 组：通用结构处理 ----------------
-    "univer": {
+    # ---------------- Univer 组：通用结构处理 ----------------
+    "Univer": {
         "substitute": {
-            "script": os.path.join("univer", "Substitute-POSCAR.py"),
+            "script": os.path.join("Univer", "Substitute-POSCAR.py"),
             "help": "Substitute POSCAR elements",
-            "desc": "封装 univer/Substitute-POSCAR.py，用于在 POSCAR 中随机替换元素。",
+            "desc": "封装 Univer/Substitute-POSCAR.py，用于在 POSCAR 中随机替换元素。",
             "examples": [
-                "leo univer substitute POSCAR POSCAR_new Al Sc 0.25",
+                "leo Univer substitute POSCAR POSCAR_new Al Sc 0.25",
             ],
         },
 
         "replicate": {
-            "script": os.path.join("univer", "POSCAR2SUPER-X.py"),
+            "script": os.path.join("Univer", "POSCAR2SUPER-X.py"),
             "help": "Replicate POSCAR & convert format",
             "desc": (
-                "封装 univer/POSCAR2SUPER-X.py，用于将 VASP 结构扩展为超胞，"
+                "封装 Univer/POSCAR2SUPER-X.py，用于将 VASP 结构扩展为超胞，"
                 "并可输出多种格式（如 lammps-data）。"
             ),
             "examples": [
-                "leo univer replicate POSCAR -r 2 2 2 -f lammps-data",
+                "leo Univer replicate POSCAR -r 2 2 2 -f lammps-data",
             ],
             # 一般不需要复制自身脚本，这里预留即可，未来可放模板文件
             "copy_files": [
-                os.path.join("univer", "POSCAR2SUPER-X.py"),
+                os.path.join("Univer", "POSCAR2SUPER-X.py"),
             ],
         },
 
         "vacancy": {
-            "script": os.path.join("univer", "POS-Remove.py"),
+            "script": os.path.join("Univer", "POS-Remove.py"),
             "help": "Make vacancy in POSCAR",
-            "desc": "封装 univer/POS-Remove.py，用于删掉 POSCAR 中指定元素/编号的原子。",
+            "desc": "封装 Univer/POS-Remove.py，用于删掉 POSCAR 中指定元素/编号的原子。",
             "examples": [
-                "leo univer vacancy In 10 POSCAR",
+                "leo Univer vacancy In 10 POSCAR",
             ],
             "copy_files": [
-                os.path.join("univer", "POS-Remove.py"),
+                os.path.join("Univer", "POS-Remove.py"),
             ],
         },
 
         "LMP2XYZ": {
-            "script": os.path.join("univer", "LAMMPS2EXYZ.py"),
+            "script": os.path.join("Univer", "LAMMPS2EXYZ.py"),
             "help": "Convert LAMMPS dump to extxyz",
-            "desc": "封装 univer/LAMMPS2EXYZ.py，将 LAMMPS dump 转换为 extxyz。",
+            "desc": "封装 Univer/LAMMPS2EXYZ.py，将 LAMMPS dump 转换为 extxyz。",
             "examples": [
-                "leo univer LMP2XYZ dump.xyz --type-map 1:Al,2:N",
+                "leo Univer LMP2XYZ dump.xyz --type-map 1:Al,2:N",
             ],
         },
 
         "potcar": {
-            "script": os.path.join("univer", "Make-POTCAR.py"),
+            "script": os.path.join("Univer", "Make-POTCAR.py"),
             "help": "Merge POTCAR by element order",
             "desc": (
-                "封装 univer/Make-POTCAR.py，将 POTCAR 库中指定元素的 POTCAR 依次合并。\n"
+                "封装 Univer/Make-POTCAR.py，将 POTCAR 库中指定元素的 POTCAR 依次合并。\n"
                 "命令格式：元素1 元素2 ... POTCAR库目录（目录作为最后一个参数）。"
             ),
             "examples": [
-                "leo univer potcar Ag H.25 /path/to/PBE",
+                "leo Univer potcar Ag H.25 /path/to/PBE",
             ],
         },
     },
@@ -379,7 +379,7 @@ def build_parser():
         title="脚本分组（group）",
         dest="group",
         metavar="group",
-        help="例如：leo univer substitute ... 或 leo nep plot ...",
+        help="例如：leo Univer substitute ... 或 leo nep plot ...",
     )
 
     # 按照 TOOLS 自动创建分组和子命令
