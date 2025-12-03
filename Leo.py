@@ -159,7 +159,7 @@ TOOLS = {
     "MD": {
         "pdos": {
             "script": os.path.join("MD", "PDOS.py"),
-            "help": "Compute VACF + PDOS from velocities",
+            "help": "VACF + PDOS",
             "desc": "封装 MD/PDOS.py，用于从 LAMMPS 速度 dump 计算 VACF 和 PDOS。",
             "examples": [
                 "leo MD pdos dump.velo --ninitial 30 --corlength-steps 5000",
