@@ -2,14 +2,17 @@
 # -*- coding: utf-8 -*-
 
 import argparse
-import numpy as np
+from typing import Dict, List
+
+from ase.io import read, write
+from ase.io.formats import UnknownFileTypeError
 
 
-def parse_type_map(s):
+def parse_type_map(s: str) -> Dict[int, str]:
     """
-    Parse "1:Al,2:N,3:Sc" → {1:"Al", 2:"N", 3:"Sc"}
+    Parse "1:Al,2:N,3:Sc" → {1: "Al", 2: "N", 3: "Sc"}
     """
-    mp = {}
+    mp: Dict[int, str] = {}
     for kv in s.split(","):
         kv = kv.strip()
         if not kv:
@@ -17,204 +20,84 @@ def parse_type_map(s):
         try:
             k, v = kv.split(":")
         except ValueError:
-            raise ValueError(f"Bad type-map entry: {kv!r}, expected like '1:Cu'")
+            raise ValueError(
+                f"Bad type-map entry: {kv!r}, expected like '1:Al,2:N'"
+            )
         mp[int(k)] = v
     return mp
 
 
-def _parse_box_line(line):
+def convert_dump_to_extxyz(
+    dump_file: str,
+    out_file: str,
+    type_map: Dict[int, str],
+) -> None:
     """
-    支持两种 BOX BOUNDS 行格式：
-      lo hi
-      lo hi tilt
-    返回 (lo, hi, tilt)
+    使用 ASE 读取 LAMMPS dump，并写出 extxyz。
+
+    这里不依赖 frame.arrays['type']，而是用
+    frame.get_atomic_numbers() 作为“类型编号”，再用
+    用户提供的 type_map 进行映射。
     """
-    parts = line.split()
-    if len(parts) == 2:
-        lo, hi = map(float, parts)
-        tilt = 0.0
-    elif len(parts) == 3:
-        lo, hi, tilt = map(float, parts)
-    else:
+    # 读所有帧；你的 dump-0.xyz 有 5000 帧
+    try:
+        frames = read(dump_file, format="lammps-dump-text", index=":")
+    except UnknownFileTypeError:
+        # 某些 ASE 版本格式名是 lammps-dump
+        frames = read(dump_file, format="lammps-dump", index=":")
+
+    if not isinstance(frames, (list, tuple)):
+        frames = [frames]
+
+    print(f"[INFO] Read {len(frames)} frame(s) from {dump_file}")
+
+    # 检查所有帧里的“类型编号”是否在 type_map 范围内
+    all_unknown: List[int] = []
+    for i, at in enumerate(frames):
+        nums = at.get_atomic_numbers()  # 整数数组
+        for z in set(nums):
+            if z not in type_map and z not in all_unknown:
+                all_unknown.append(z)
+
+    if all_unknown:
         raise RuntimeError(
-            f"BOX BOUNDS 行无法解析：{line!r} (需要 2 或 3 个数)"
-        )
-    return lo, hi, tilt
-
-
-def _choose_coord_columns(header):
-    """
-    从 ATOMS 头部中选择坐标列名，支持：
-      - x y z
-      - xs ys zs
-      - xu yu zu
-    返回 (cx, cy, cz)
-    """
-    candidates = [
-        ("x", "y", "z"),
-        ("xs", "ys", "zs"),
-        ("xu", "yu", "zu"),
-    ]
-    for cx, cy, cz in candidates:
-        if cx in header and cy in header and cz in header:
-            return cx, cy, cz
-    raise RuntimeError(
-        f"找不到坐标列，头部为：{header}\n"
-        f"需要包含以下三元组之一：x/y/z, xs/ys/zs 或 xu/yu/zu"
-    )
-
-
-def read_lammps_dump(path):
-    """
-    Read LAMMPS dump with format:
-
-    ITEM: TIMESTEP
-    <int>
-    ITEM: NUMBER OF ATOMS
-    <natoms>
-    ITEM: BOX BOUNDS [xy xz yz] ...
-    <xlo xhi [xy]>
-    <ylo yhi [xz]>
-    <zlo zhi [yz]>
-    ITEM: ATOMS id type x y z ...
-    ...
-    """
-    frames = []
-
-    with open(path, "r") as f:
-        lines = [l.strip() for l in f]
-
-    i = 0
-    n = len(lines)
-    while i < n:
-        # 寻找 "ITEM: TIMESTEP"
-        if not lines[i].startswith("ITEM: TIMESTEP"):
-            i += 1
-            continue
-
-        i += 1
-        if i >= n:
-            break
-        timestep = int(lines[i])
-        i += 1
-
-        # NUMBER OF ATOMS
-        if i >= n or not lines[i].startswith("ITEM: NUMBER OF ATOMS"):
-            raise RuntimeError("Missing 'ITEM: NUMBER OF ATOMS'")
-        i += 1
-        nat = int(lines[i])
-        i += 1
-
-        # BOX BOUNDS
-        if i >= n or not lines[i].startswith("ITEM: BOX BOUNDS"):
-            raise RuntimeError("Missing 'ITEM: BOX BOUNDS'")
-        box_header = lines[i]
-        i += 1
-
-        # 兼容：lo hi / lo hi tilt
-        xlo, xhi, xy = _parse_box_line(lines[i]); i += 1
-        ylo, yhi, xz = _parse_box_line(lines[i]); i += 1
-        zlo, zhi, yz = _parse_box_line(lines[i]); i += 1
-
-        # 构造晶格矩阵 (与 OVITO/VASP 一致)
-        ax = xhi - xlo
-        by = yhi - ylo
-        cz = zhi - zlo
-
-        a = np.array([ax, 0.0, 0.0], float)
-        b = np.array([xy, by, 0.0], float)
-        c = np.array([xz, yz, cz], float)
-
-        lattice = np.vstack([a, b, c])  # 3×3
-
-        # ATOMS
-        if i >= n or not lines[i].startswith("ITEM: ATOMS"):
-            raise RuntimeError("Missing 'ITEM: ATOMS' line")
-
-        header_tokens = lines[i].split()[2:]
-        i += 1
-
-        colmap = {h: idx for idx, h in enumerate(header_tokens)}
-
-        # id / type 必须有
-        for r in ["id", "type"]:
-            if r not in colmap:
-                raise RuntimeError(f"Dump 缺少列: {r!r}，当前列: {header_tokens}")
-
-        # 选择坐标列
-        cx, cy, cz_name = _choose_coord_columns(header_tokens)
-
-        # 读取原子行
-        rows = lines[i:i + nat]
-        if len(rows) < nat:
-            raise RuntimeError(
-                f"期待 {nat} 行 ATOMS 数据，但文件只剩 {len(rows)} 行"
-            )
-        i += nat
-
-        ids = []
-        types = []
-        pos = []
-
-        for r in rows:
-            p = r.split()
-            ids.append(int(p[colmap["id"]]))
-            types.append(int(p[colmap["type"]]))
-            pos.append([
-                float(p[colmap[cx]]),
-                float(p[colmap[cy]]),
-                float(p[colmap[cz_name]]),
-            ])
-
-        ids = np.array(ids)
-        types = np.array(types)
-        pos = np.array(pos)
-
-        # 按 id 排序
-        idx = np.argsort(ids)
-        frames.append(
-            (timestep, lattice, types[idx], pos[idx])
+            "在 dump 中发现以下类型编号/atomic numbers，"
+            f"但未在 --type-map 中提供映射: {sorted(all_unknown)}\n"
+            f"当前 type-map: {type_map}"
         )
 
-    return frames
+    # 逐帧把 atomic_numbers → 指定元素符号
+    new_frames = []
+    for i, at in enumerate(frames):
+        nums = at.get_atomic_numbers()
+        symbols = [type_map[int(z)] for z in nums]
+        at.set_chemical_symbols(symbols)
+        new_frames.append(at)
 
-
-def write_extxyz(frames, type_map, outfile):
-    with open(outfile, "w") as f:
-        for (ts, lat, types, pos) in frames:
-            nat = len(types)
-            # Lattice="ax ay az bx by bz cx cy cz"
-            lat_flat = " ".join(f"{x:.8f}" for x in lat.flatten())
-
-            f.write(f"{nat}\n")
-            f.write(
-                f'Time={ts} pbc="T T T" Lattice="{lat_flat}" '
-                f'Properties=species:S:1:pos:R:3\n'
-            )
-
-            for t, (x, y, z) in zip(types, pos):
-                elem = type_map.get(t, f"T{t}")
-                f.write(f"{elem} {x:.8f} {y:.8f} {z:.8f}\n")
+    # 写出 extxyz
+    write(out_file, new_frames, format="extxyz")
+    print(f"[OK] Written {len(new_frames)} frame(s) to {out_file}")
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Convert LAMMPS dump → extxyz")
+    ap = argparse.ArgumentParser(
+        description="Convert LAMMPS dump → extxyz (using ASE, with type-map)"
+    )
     ap.add_argument("dump", help="LAMMPS dump file")
-    ap.add_argument("--out", default="output.xyz", help="extxyz output file")
+    ap.add_argument(
+        "--out", default="output.xyz",
+        help="extxyz output file (default: output.xyz)"
+    )
     ap.add_argument(
         "--type-map",
         required=True,
-        help='e.g. "1:Cu,2:Se,3:Ag"',
+        help='e.g. "1:Al,2:N,3:Sc"  (编号 → 元素符号)',
     )
 
     args = ap.parse_args()
 
     type_map = parse_type_map(args.type_map)
-    frames = read_lammps_dump(args.dump)
-
-    print(f"[INFO] Read {len(frames)} frames from {args.dump}")
-    write_extxyz(frames, type_map, args.out)
-    print(f"[OK] Written extxyz → {args.out}")
+    convert_dump_to_extxyz(args.dump, args.out, type_map)
 
 
 if __name__ == "__main__":

@@ -7,7 +7,11 @@ using calorine.nep.get_descriptors (no pynep), and visualize
 descriptor space with PCA (4 subplots + global legend).
 
 Usage:
-    python select_calor4.py sample.xyz train.xyz nep.txt
+    # 按最小距离筛选
+    python select_calor4.py sample.xyz train.xyz nep.txt mindist 0.02
+
+    # （可选）按数量筛选
+    python select_calor4.py sample.xyz train.xyz nep.txt nselect 100
 """
 
 import sys
@@ -201,14 +205,17 @@ def farthest_point_sample_by_number(des_sample, des_train,
 
 # ======================= 主程序 ======================= #
 
-if len(sys.argv) < 4:
-    print(" Usage: python select_calor4.py <sampledata_file> <traindata_file> <nep_model_file>")
-    print(" Examp: python select_calor4.py sample.xyz train.xyz nep.txt")
+if len(sys.argv) < 6:
+    print(" Usage:")
+    print("   python select_calor4.py sample.xyz train.xyz nep.txt mindist 0.02")
+    print("   python select_calor4.py sample.xyz train.xyz nep.txt nselect 100")
     sys.exit(1)
 
 sample_file = sys.argv[1]
 train_file = sys.argv[2]
 MODEL_FILE = sys.argv[3]
+mode = sys.argv[4].lower()
+param = sys.argv[5]
 
 # 读入数据
 sampledata = read(sample_file, ':')
@@ -217,48 +224,27 @@ traindata = read(train_file, ':')
 print(f"[INFO] sample structures : {len(sampledata)}")
 print(f"[INFO] train  structures : {len(traindata)}")
 print(f"[INFO] NEP model file    : {MODEL_FILE}")
+print(f"[INFO] selection mode    : {mode}")
+print(f"[INFO] parameter         : {param}")
 
-# 选择方式（和你原版交互一致）
-print(" Choose selection method:")
-print(" 1) min_distance (descriptor space)")
-print(" 2) min_select / max_select (number of structures)")
-choice = input(" ------------>> ").strip()
+# 先统一算描述子（后面 PCA 也要用）
+des_sample, des_train = calculate_descriptors()
 
-if choice == '1':
-    min_dist = float(input(" Enter min_dist (e.g., 0.02): ").strip())
-    des_sample, des_train = calculate_descriptors()
+if mode == 'mindist':
+    min_dist = float(param)
     selected_idx = farthest_point_sample_min_distance(
         des_sample, des_train,
         min_distance=min_dist,
         max_select=None
     )
-
-elif choice == '2':
-    try:
-        min_max_input = input(" Enter min_select and max_select (e.g., '50 100'): ").strip()
-        min_select, max_select = map(int, min_max_input.split())
-        if min_select < 1 or max_select < min_select:
-            print(" Error: min_select must be >= 1 and max_select must be >= min_select.")
-            sys.exit(1)
-
-        des_sample, des_train = calculate_descriptors()
-
-        n_sample = des_sample.shape[0]
-        if min_select > n_sample:
-            print(f" [WARN] min_select ({min_select}) > number of sample structures ({n_sample}).")
-            print(f"        Will select at most {n_sample} structures.")
-
-        # 这里用 max_select 作为目标数量（和你原来逻辑一致）
-        n_target = min(max_select, n_sample)
-        selected_idx = farthest_point_sample_by_number(
-            des_sample, des_train,
-            n_target=n_target
-        )
-    except ValueError:
-        print(" Error: Please enter two integers separated by a space (e.g., '50 100').")
-        sys.exit(1)
+elif mode == 'nselect':
+    n_target = int(param)
+    selected_idx = farthest_point_sample_by_number(
+        des_sample, des_train,
+        n_target=n_target
+    )
 else:
-    print(" Invalid choice. Exit.")
+    print(" [ERROR] Unknown mode. Use 'mindist' or 'nselect'.")
     sys.exit(1)
 
 print(f"[INFO] Selected {len(selected_idx)} structures")
