@@ -3,18 +3,21 @@
 """
 从 LAMMPS 速度 dump 计算 VACF & PDOS（频率单位：THz）
 
+改动点：
+- PDOS 横坐标 freq_THz 对 total 和各 type 是一样的，因此将它们合并写到一个文件：
+  <prefix>_PDOS_merged.txt
+  第一列 freq_THz，后面列依次为：DOS_total, DOS_type<id>...
+
 示例：
-    python pdos_vacf_thz.py dump.lammpstrj
-    python pdos_vacf_thz.py dump.lammpstrj --output-prefix AlN_300K \
+    python pdos_vacf_thz_merge.py dump.lammpstrj
+    python pdos_vacf_thz_merge.py dump.lammpstrj --output-prefix AlN_300K \
         --ninitial 30 --corlength-steps 5000 --ngap-steps 200 \
         --tfreq 10 --dt 0.001 --omaga-max 25 --max-omega-points 1500
 """
 
-import sys
 import time
 import math
 import argparse
-from collections import defaultdict
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -29,11 +32,6 @@ DEFAULT_MAX_OMEGA_POINTS = 1000     # 频率点数
 
 
 def progress_bar(current, total, start_time, prefix=""):
-    """
-    在终端打印进度条和 ETA。
-    current: 当前进度（0 ~ total）
-    total  : 总数
-    """
     frac = current / total if total > 0 else 1.0
     percent = frac * 100.0
     elapsed = time.time() - start_time
@@ -47,7 +45,7 @@ def progress_bar(current, total, start_time, prefix=""):
            f"Elapsed: {elapsed:6.1f}s  ETA: {eta:6.1f}s")
     print(msg, end="", flush=True)
     if current == total:
-        print()  # 换行
+        print()
 
 
 # ============================================================
@@ -57,13 +55,12 @@ def progress_bar(current, total, start_time, prefix=""):
 def read_lammps_dump_velocities(filename):
     """
     读取 LAMMPS dump 文件中所有帧的 (id, type, vx, vy, vz)。
-
     要求：
       ITEM: ATOMS ... id ... type ... vx vy vz
     返回：
-      velocities: shape (n_frames, n_atoms, 3)
-      types     : shape (n_atoms,)  （按 id 排序后的 type）
-      ids       : shape (n_atoms,)
+      velocities: (n_frames, n_atoms, 3)
+      types     : (n_atoms,)  （按 id 排序后的 type）
+      ids       : (n_atoms,)
     """
     print(f"Reading LAMMPS dump from: {filename}")
     frames_vel = []
@@ -94,13 +91,13 @@ def read_lammps_dump_velocities(filename):
             if not line.startswith("ITEM: BOX BOUNDS"):
                 raise RuntimeError("Expected 'ITEM: BOX BOUNDS'")
             for _ in range(3):
-                f.readline()  # 跳过 3 行 box
+                f.readline()
 
             # ATOMS header
             line = f.readline()
             if not line.startswith("ITEM: ATOMS"):
                 raise RuntimeError("Expected 'ITEM: ATOMS'")
-            header_parts = line.strip().split()[2:]  # 去掉 "ITEM:" "ATOMS"
+            header_parts = line.strip().split()[2:]  # after "ITEM: ATOMS"
 
             def find_col(name):
                 if name not in header_parts:
@@ -117,16 +114,14 @@ def read_lammps_dump_velocities(filename):
             types = np.zeros(natoms, dtype=int)
             vels  = np.zeros((natoms, 3), dtype=float)
 
-            # 读原子数据
             for i in range(natoms):
                 parts = f.readline().split()
-                ids[i]        = int(parts[id_col])
-                types[i]      = int(parts[type_col])
-                vels[i, 0]    = float(parts[vx_col])
-                vels[i, 1]    = float(parts[vy_col])
-                vels[i, 2]    = float(parts[vz_col])
+                ids[i]     = int(parts[id_col])
+                types[i]   = int(parts[type_col])
+                vels[i, 0] = float(parts[vx_col])
+                vels[i, 1] = float(parts[vy_col])
+                vels[i, 2] = float(parts[vz_col])
 
-            # 以 id 排序，保证每帧原子顺序一致
             sort_idx     = np.argsort(ids)
             ids_sorted   = ids[sort_idx]
             types_sorted = types[sort_idx]
@@ -137,29 +132,24 @@ def read_lammps_dump_velocities(filename):
                 types_ref = types_sorted.copy()
             else:
                 if not np.array_equal(ids_sorted, ids_ref):
-                    raise RuntimeError("Atom IDs differ between frames; "
-                                       "cannot align velocities.")
+                    raise RuntimeError("Atom IDs differ between frames; cannot align velocities.")
 
             frames_vel.append(vels_sorted)
 
-    velocities = np.stack(frames_vel, axis=0)  # (n_frames, n_atoms, 3)
+    velocities = np.stack(frames_vel, axis=0)
     print(f"  Total frames read: {velocities.shape[0]}, atoms: {velocities.shape[1]}")
     return velocities, types_ref, ids_ref
 
 
 # ============================================================
-# 2. 多时间起点 VACF 计算（标量 v·v0）
+# 2. 多时间起点 VACF
 # ============================================================
 
 def compute_vacf_multi_origin(vels, n_initial, corlength_steps, ngap_steps,
                               dT, tfreq, label=""):
-    """
-    计算指定原子集合的多时间起点 VACF。
-    """
-    n_frames, n_atoms, _ = vels.shape
+    n_frames, _, _ = vels.shape
     dt_save = dT * tfreq
 
-    # 换算为帧单位
     gap_frames  = ngap_steps      // tfreq
     corr_frames = corlength_steps // tfreq
     if gap_frames <= 0:
@@ -167,7 +157,6 @@ def compute_vacf_multi_origin(vels, n_initial, corlength_steps, ngap_steps,
     if corr_frames <= 0:
         raise ValueError("CORLENGTH_STEPS / TFREQ must be >= 1")
 
-    # 选择初始帧索引：0, gap_frames, 2*gap_frames, ...
     init_indices = []
     for k in range(n_initial):
         idx = k * gap_frames
@@ -181,7 +170,6 @@ def compute_vacf_multi_origin(vels, n_initial, corlength_steps, ngap_steps,
     print(f"{label} Using {actual_ninit} initial conditions "
           f"(gap = {gap_frames} frames, corr = {corr_frames} frames)")
 
-    # 检查是否有足够的帧覆盖全部相关长度
     last_init = init_indices[-1]
     if last_init + corr_frames > n_frames:
         raise RuntimeError(
@@ -194,15 +182,14 @@ def compute_vacf_multi_origin(vels, n_initial, corlength_steps, ngap_steps,
 
     start_time = time.time()
     for idx_k, init_idx in enumerate(init_indices):
-        v0 = vels[init_idx]             # (n_atoms, 3)
+        v0 = vels[init_idx]
         norm0 = np.sum(v0 * v0)
         if norm0 == 0.0:
             continue
 
         for lag in range(corr_frames):
-            frame_idx = init_idx + lag
-            v = vels[frame_idx]
-            dot = np.sum(v * v0)        # sum_{i} v(t)·v(0)
+            v = vels[init_idx + lag]
+            dot = np.sum(v * v0)
             vacf_matrix[idx_k, lag] = dot / norm0
 
         progress_bar(idx_k + 1, actual_ninit, start_time,
@@ -214,43 +201,32 @@ def compute_vacf_multi_origin(vels, n_initial, corlength_steps, ngap_steps,
 
 
 # ============================================================
-# 3. 从 VACF 计算 DOS（频率单位：THz）
+# 3. 从 VACF 计算 DOS（THz）
 # ============================================================
 
 def compute_dos_from_vacf(vcorr, n_local_atoms, dT, corlength_steps,
                           tfreq, omaga_max, maxT):
-    """
-    根据规范化 VACF 计算 PDOS，频率单位为 THz。
-
-    与 C 代码类似：
-      domaga = omagaval / maxT
-      Tdelta = dT * Corlength * 0.5
-      dtw   = dT * jj * TFREQ
-    """
-    r_Corlength = corlength_steps // tfreq  # VACF 点数
+    r_Corlength = corlength_steps // tfreq
     if len(vcorr) < r_Corlength:
         r_Corlength = len(vcorr)
 
-    domaga = omaga_max / float(maxT)        # THz 间隔
-    Tdelta = dT * corlength_steps * 0.5     # 高斯窗宽度（ps）
+    domaga = omaga_max / float(maxT)        # THz step
+    Tdelta = dT * corlength_steps * 0.5     # ps
 
-    freq   = np.zeros(maxT, dtype=float)    # THz
+    freq   = np.zeros(maxT, dtype=float)
     dosval = np.zeros(maxT, dtype=float)
 
     print(f"Computing DOS: max freq = {omaga_max} THz, points = {maxT}")
     start_time = time.time()
     for ii in range(maxT):
-        dw = ii * domaga          # THz
+        dw = ii * domaga
         dstate = 0.0
         for jj in range(r_Corlength):
-            dtw = dT * jj * tfreq                    # 物理时间 (ps)
-            w_t = math.cos(2.0 * math.pi * dw * dtw) \
-                  * math.exp(- (dtw / Tdelta) ** 2)  # 窗函数 * cos
+            dtw = dT * jj * tfreq
+            w_t = math.cos(2.0 * math.pi * dw * dtw) * math.exp(- (dtw / Tdelta) ** 2)
             dstate += dT * tfreq * vcorr[jj] * w_t
 
-        # 横坐标直接用频率 THz
         freq[ii]   = dw
-        # 纵坐标归一化因子保留原形式（只是整体尺度问题）
         dosval[ii] = 6.0 * n_local_atoms * dstate * 0.31847
 
         if (ii + 1) % max(1, maxT // 50) == 0:
@@ -260,7 +236,7 @@ def compute_dos_from_vacf(vcorr, n_local_atoms, dT, corlength_steps,
 
 
 # ============================================================
-# 4. 主流程：读 dump -> 各类型 VACF+PDOS -> 总 VACF+DOS -> 画图
+# 4. 主流程
 # ============================================================
 
 def main():
@@ -271,32 +247,23 @@ def main():
     parser.add_argument("--output-prefix", default="pdos",
                         help="Prefix for output text & figure files (default: pdos)")
 
-    # 关键参数全部开放到命令行
-    parser.add_argument("--ninitial", type=int, default=DEFAULT_NINITIAL,
-                        help=f"Number of initial times (NINITIAL), default {DEFAULT_NINITIAL}")
-    parser.add_argument("--corlength-steps", type=int, default=DEFAULT_CORLENGTH_STEPS,
-                        help=f"Correlation length in MD steps (CORLENGTH_STEPS), default {DEFAULT_CORLENGTH_STEPS}")
-    parser.add_argument("--ngap-steps", type=int, default=DEFAULT_NGAP_STEPS,
-                        help=f"Gap between initial times in MD steps (NGAP_STEPS), default {DEFAULT_NGAP_STEPS}")
-    parser.add_argument("--tfreq", type=int, default=DEFAULT_TFREQ,
-                        help=f"Dump saving interval in MD steps (TFREQ), default {DEFAULT_TFREQ}")
-    parser.add_argument("--dt", type=float, default=DEFAULT_DT,
-                        help=f"MD time step in ps (DT), default {DEFAULT_DT}")
-    parser.add_argument("--omaga-max", type=float, default=DEFAULT_OMAGA_MAX,
-                        help=f"Max frequency in THz for DOS (OMAGA_MAX), default {DEFAULT_OMAGA_MAX}")
-    parser.add_argument("--max-omega-points", type=int, default=DEFAULT_MAX_OMEGA_POINTS,
-                        help=f"Number of frequency points for DOS (MAX_OMEGA_POINTS), default {DEFAULT_MAX_OMEGA_POINTS}")
+    parser.add_argument("--ninitial", type=int, default=DEFAULT_NINITIAL)
+    parser.add_argument("--corlength-steps", type=int, default=DEFAULT_CORLENGTH_STEPS)
+    parser.add_argument("--ngap-steps", type=int, default=DEFAULT_NGAP_STEPS)
+    parser.add_argument("--tfreq", type=int, default=DEFAULT_TFREQ)
+    parser.add_argument("--dt", type=float, default=DEFAULT_DT)
+    parser.add_argument("--omaga-max", type=float, default=DEFAULT_OMAGA_MAX)
+    parser.add_argument("--max-omega-points", type=int, default=DEFAULT_MAX_OMEGA_POINTS)
 
     args = parser.parse_args()
-
     dump_file = args.dump_file
     prefix    = args.output_prefix
 
-    # 读取 dump
     velocities, types, ids = read_lammps_dump_velocities(dump_file)
     n_frames, n_atoms, _   = velocities.shape
 
     unique_types = np.unique(types)
+    unique_types = np.array(sorted(unique_types.tolist()), dtype=int)
     print(f"Detected {len(unique_types)} atom types: {unique_types.tolist()}")
 
     type_to_indices = {t: np.where(types == t)[0] for t in unique_types}
@@ -304,12 +271,13 @@ def main():
     vacf_results = {}
     dos_results  = {}
 
-    # ------- 每种原子类型的 VACF/PDOS ------- #
+    # ------- 各 type 的 VACF/PDOS ------- #
     for t in unique_types:
         idx   = type_to_indices[t]
-        v_sub = velocities[:, idx, :]   # (n_frames, n_atoms_type, 3)
+        v_sub = velocities[:, idx, :]
         label = f"type {t}"
         print(f"\n=== Processing atom type {t} (natoms = {len(idx)}) ===")
+
         t_arr, vacf = compute_vacf_multi_origin(
             v_sub,
             n_initial       = args.ninitial,
@@ -332,15 +300,12 @@ def main():
         vacf_results[t] = (t_arr, vacf)
         dos_results[t]  = (freq, dosval)
 
-        # 写出单独文本文件（freq 为 THz）
+        # 仍然输出每个 type 的 VACF（便于你检查）
         np.savetxt(f"{prefix}_VACF_type{t}.txt",
                    np.column_stack([t_arr, vacf]),
-                   header="t(ps) VACF(t)")
-        np.savetxt(f"{prefix}_PDOS_type{t}.txt",
-                   np.column_stack([freq, dosval]),
-                   header="freq_THz PDOS")
+                   header="t_ps VACF")
 
-    # ------- 全部原子总 VACF / 总 DOS ------- #
+    # ------- total VACF / DOS ------- #
     print("\n=== Processing ALL atoms (total VACF & DOS) ===")
     t_arr_total, vacf_total = compute_vacf_multi_origin(
         velocities,
@@ -363,10 +328,30 @@ def main():
 
     np.savetxt(f"{prefix}_VACF_total.txt",
                np.column_stack([t_arr_total, vacf_total]),
-               header="t(ps) VACF_total(t)")
-    np.savetxt(f"{prefix}_DOS_total.txt",
-               np.column_stack([freq_total, dos_total]),
-               header="freq_THz DOS_total")
+               header="t_ps VACF_total")
+
+    # ====================================================
+    # 合并输出 PDOS：freq + total + types
+    # ====================================================
+    # 频率轴一致性检查（强制确保可并表）
+    for t in unique_types:
+        freq_t = dos_results[t][0]
+        if len(freq_t) != len(freq_total) or np.max(np.abs(freq_t - freq_total)) > 1e-12:
+            raise RuntimeError(
+                f"Frequency grid mismatch for type {t}. "
+                f"Please ensure same omaga-max/max-omega-points."
+            )
+
+    merged_cols = [freq_total, dos_total]
+    header = ["freq_THz", "DOS_total"]
+    for t in unique_types:
+        merged_cols.append(dos_results[t][1])
+        header.append(f"DOS_type{t}")
+
+    merged = np.column_stack(merged_cols)
+    merged_file = f"{prefix}_PDOS_merged.txt"
+    np.savetxt(merged_file, merged, header=" ".join(header))
+    print(f"[OK] Saved merged PDOS to: {merged_file}")
 
     # ====================================================
     # 画组图：上 VACF，下 PDOS（总 + 各类型）
@@ -374,7 +359,6 @@ def main():
     fig, axes = plt.subplots(2, 1, figsize=(7, 8), dpi=200)
     ax_vacf, ax_dos = axes
 
-    # VACF
     ax_vacf.plot(t_arr_total, vacf_total, label="total", linewidth=2.5)
     for t in unique_types:
         t_arr, vacf = vacf_results[t]
@@ -385,7 +369,6 @@ def main():
     ax_vacf.set_xlim(left=0)
     ax_vacf.legend()
 
-    # PDOS（THz）
     ax_dos.plot(freq_total, dos_total, label="total", linewidth=2.5)
     for t in unique_types:
         freq, dosval = dos_results[t]
