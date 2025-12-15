@@ -8,7 +8,7 @@ column   1  2  3  4   5   6   7    8    9    10 11 12 13 14 15 16 17 18
 quantity T  K  U  Pxx Pyy Pzz Pyz  Pxz  Pxy  ax ay az bx by bz cx cy cz
 
 1) T
-2) K, U
+2) K, U（双 y 轴：左K，右U）
 3) Pxx, Pyy, Pzz
 4) ax ay az bx by bz cx cy cz
 
@@ -61,9 +61,6 @@ def main():
     # --------- 横坐标：行号 ---------- #
     x = np.arange(nrows)  # 0,1,2,...,n-1
     x_label = "index"
-    # 如果你更喜欢从 1 开始，改成：
-    # x = np.arange(1, nrows + 1)
-    # x_label = "index (1-based)"
 
     # --------- 各列赋名（按你给的固定顺序） ---------- #
     T   = data[:, 0]   # col 1
@@ -97,13 +94,22 @@ def main():
     ax11.set_ylabel("T (K)")
     ax11.set_title("Temperature")
 
-    # 子图2：K & U
-    ax12.plot(x, K, label="K", linewidth=1)
-    ax12.plot(x, U, label="U", linewidth=1)
-    ax12.set_xlabel(x_label)
-    ax12.set_ylabel("Energy (eV)")
-    ax12.set_title("Kinetic & Potential Energy")
-    ax12.legend()
+    # 子图2：K & U（双 y 轴）
+    ax12_left = ax12
+    ax12_right = ax12_left.twinx()
+
+    l1, = ax12_left.plot(x, K, linewidth=1, label="K")
+    l2, = ax12_right.plot(x, U, linewidth=1, label="U")
+
+    ax12_left.set_xlabel(x_label)
+    ax12_left.set_ylabel("K (eV)")       # 你原来写 Energy(eV)，这里拆开更清楚
+    ax12_right.set_ylabel("U (eV)")
+    ax12_left.set_title("Kinetic (left) & Potential (right)")
+
+    # 合并图例（放一个 legend，避免左右各一个）
+    lines = [l1, l2]
+    labels = [ln.get_label() for ln in lines]
+    ax12_left.legend(lines, labels, loc="best")
 
     # 子图3：Pxx, Pyy, Pzz
     ax21.plot(x, Pxx, label="Pxx", linewidth=1)
@@ -113,11 +119,6 @@ def main():
     ax21.set_ylabel("P (thermo units)")
     ax21.set_title("Diagonal Pressure/Stress")
     ax21.legend()
-
-    # （如果想看剪切分量，可以解开下面几行）
-    # ax21.plot(x, Pyz, label="Pyz", linewidth=1, linestyle="--")
-    # ax21.plot(x, Pxz, label="Pxz", linewidth=1, linestyle="--")
-    # ax21.plot(x, Pxy, label="Pxy", linewidth=1, linestyle="--")
 
     # 子图4：晶格矢量分量
     ax22.plot(x, ax, label="ax", linewidth=1)
