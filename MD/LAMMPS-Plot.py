@@ -6,7 +6,7 @@
 
 1) 温度 & 体积 vs step（双 y 轴）
 2) 总压 Press & 分压 Pxx/Pyy/Pzz vs step
-3) 势能 PotEng、动能 KinEng、Enthalpy、TotEng vs step
+3) 动能 KinEng（左轴） vs 势能 PotEng/Enthalpy/TotEng（右轴）  <-- 已改为双 y 轴
 4) 晶格常数 cella/cellb/cellc & 晶格角 cellalpha/beta/gamma vs step（双 y 轴）
 
 适配命令：
@@ -83,14 +83,12 @@ def parse_log_thermo_blocks(logfile):
 
                 # 列数不对：通常是最后一行没写完，结束当前 block（不再继续读）
                 if len(parts) != ncols:
-                    # print(f"[warning] skip incomplete thermo line: {s}")
                     break
 
                 # 尝试转成 float
                 try:
                     row = [float(x.replace('D', 'E').replace('d', 'e')) for x in parts]
                 except ValueError:
-                    # 有非数字内容，结束本 block
                     break
 
                 data_rows.append(row)
@@ -126,10 +124,6 @@ def build_col_finder(header):
     header_lc = [h.lower() for h in header]
 
     def find_col(candidates, required=True):
-        """
-        candidates: list[str] ，优先匹配顺序
-        required  : 若 True，找不到则抛错；若 False，找不到返回 None
-        """
         for cand in candidates:
             cand_lc = cand.lower()
             if cand_lc in header_lc:
@@ -147,12 +141,6 @@ def build_col_finder(header):
 def plot_one_run(run_index, header, data, prefix="thermo"):
     """
     对单轮 run 的 thermo 数据画图并保存。
-
-    参数：
-        run_index: 从 1 开始的序号
-        header   : list[str]
-        data     : np.ndarray (n_steps, n_cols)
-        prefix   : 输出文件名前缀
     """
     if data.shape[0] < 2:
         print(f"[warning] run {run_index} has less than 2 rows, skip plotting.")
@@ -160,7 +148,7 @@ def plot_one_run(run_index, header, data, prefix="thermo"):
 
     find_col = build_col_finder(header)
 
-    # 提取需要的列索引（大小写不敏感，兼容 LAMMPS 默认名字）
+    # 提取需要的列索引
     idx_step     = find_col(["step"])
     idx_temp     = find_col(["temp"])
     idx_press    = find_col(["press"])
@@ -225,15 +213,30 @@ def plot_one_run(run_index, header, data, prefix="thermo"):
     ax2.set_title("Pressure & Stress Components vs Step")
     ax2.legend(fontsize=8)
 
-    # 3) 势能 / 动能 / 焓 / 总能
-    ax3.plot(step, pe,       label="PotEng",   color="C0")
-    ax3.plot(step, ke,       label="KinEng",   color="C1")
-    ax3.plot(step, enthalpy, label="Enthalpy", color="C2")
-    ax3.plot(step, etotal,   label="TotEng",   color="C3", linestyle="--")
-    ax3.set_xlabel("Step")
-    ax3.set_ylabel("Energy")
-    ax3.set_title("Energies vs Step")
-    ax3.legend(fontsize=8)
+    # 3) 能量：KinEng 左轴；PotEng/Enthalpy/TotEng 右轴（双 y 轴）
+    ax3_left = ax3
+    ax3_right = ax3_left.twinx()
+
+    # 左轴：动能（用蓝色）
+    lke, = ax3_left.plot(step, ke, label="KinEng", color="tab:blue", linewidth=1.2)
+    ax3_left.set_xlabel("Step")
+    ax3_left.set_ylabel("KinEng", color="tab:blue")
+    ax3_left.tick_params(axis="y", labelcolor="tab:blue")
+
+    # 右轴：其他能量（用暖色系/不同颜色）
+    lpe, = ax3_right.plot(step, pe, label="PotEng", color="tab:red", linewidth=1.0)
+    lent, = ax3_right.plot(step, enthalpy, label="Enthalpy", color="tab:orange", linewidth=1.0)
+    letot, = ax3_right.plot(step, etotal, label="TotEng", color="tab:green", linewidth=1.0, linestyle="--")
+
+    ax3_right.set_ylabel("PotEng / Enthalpy / TotEng", color="tab:red")
+    ax3_right.tick_params(axis="y", labelcolor="tab:red")
+
+    ax3_left.set_title("Energies vs Step (KinEng left, others right)")
+
+    # 合并 legend（左+右）
+    lines = [lke, lpe, lent, letot]
+    labels = [ln.get_label() for ln in lines]
+    ax3_left.legend(lines, labels, fontsize=8, loc="best")
 
     # 4) 晶格常数 + 晶格角（双 y 轴）
     ax4.plot(step, cella, label="cella", color="C0")
