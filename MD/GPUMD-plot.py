@@ -8,7 +8,7 @@ column   1  2  3  4   5   6   7    8    9    10 11 12 13 14 15 16 17 18
 quantity T  K  U  Pxx Pyy Pzz Pyz  Pxz  Pxy  ax ay az bx by bz cx cy cz
 
 1) T
-2) K, U（双 y 轴：左K，右U）
+2) K & U（双 y 轴：左K，右U；颜色区分）
 3) Pxx, Pyy, Pzz
 4) ax ay az bx by bz cx cy cz
 
@@ -61,6 +61,9 @@ def main():
     # --------- 横坐标：行号 ---------- #
     x = np.arange(nrows)  # 0,1,2,...,n-1
     x_label = "index"
+    # 如需从1开始：
+    # x = np.arange(1, nrows + 1)
+    # x_label = "index (1-based)"
 
     # --------- 各列赋名（按你给的固定顺序） ---------- #
     T   = data[:, 0]   # col 1
@@ -74,15 +77,15 @@ def main():
     Pxz = data[:, 7]   # col 8
     Pxy = data[:, 8]   # col 9
 
-    ax = data[:, 9]    # col 10
-    ay = data[:, 10]   # col 11
-    az = data[:, 11]   # col 12
-    bx = data[:, 12]   # col 13
-    by = data[:, 13]   # col 14
-    bz = data[:, 14]   # col 15
-    cx = data[:, 15]   # col 16
-    cy = data[:, 16]   # col 17
-    cz = data[:, 17]   # col 18
+    axv = data[:, 9]    # col 10  (避免与matplotlib的ax对象冲突，这里改名 axv)
+    ayv = data[:, 10]   # col 11
+    azv = data[:, 11]   # col 12
+    bxv = data[:, 12]   # col 13
+    byv = data[:, 13]   # col 14
+    bzv = data[:, 14]   # col 15
+    cxv = data[:, 15]   # col 16
+    cyv = data[:, 16]   # col 17
+    czv = data[:, 17]   # col 18
 
     # --------- 画 4 个子图 ---------- #
     fig, axes = plt.subplots(2, 2, figsize=(12, 8))
@@ -94,19 +97,33 @@ def main():
     ax11.set_ylabel("T (K)")
     ax11.set_title("Temperature")
 
-    # 子图2：K & U（双 y 轴）
+    # 子图2：K & U（双 y 轴 + 颜色区分）
     ax12_left = ax12
     ax12_right = ax12_left.twinx()
 
-    l1, = ax12_left.plot(x, K, linewidth=1, label="K")
-    l2, = ax12_right.plot(x, U, linewidth=1, label="U")
+    l1, = ax12_left.plot(
+        x, K,
+        linewidth=1.2,
+        color="tab:blue",
+        label="K"
+    )
+    l2, = ax12_right.plot(
+        x, U,
+        linewidth=1.2,
+        color="tab:red",
+        label="U"
+    )
 
     ax12_left.set_xlabel(x_label)
-    ax12_left.set_ylabel("K (eV)")       # 你原来写 Energy(eV)，这里拆开更清楚
-    ax12_right.set_ylabel("U (eV)")
-    ax12_left.set_title("Kinetic (left) & Potential (right)")
+    ax12_left.set_ylabel("Kinetic energy K (eV)", color="tab:blue")
+    ax12_right.set_ylabel("Potential energy U (eV)", color="tab:red")
 
-    # 合并图例（放一个 legend，避免左右各一个）
+    ax12_left.tick_params(axis="y", labelcolor="tab:blue")
+    ax12_right.tick_params(axis="y", labelcolor="tab:red")
+
+    ax12_left.set_title("Kinetic (left) & Potential (right) Energy")
+
+    # 合并图例
     lines = [l1, l2]
     labels = [ln.get_label() for ln in lines]
     ax12_left.legend(lines, labels, loc="best")
@@ -120,16 +137,21 @@ def main():
     ax21.set_title("Diagonal Pressure/Stress")
     ax21.legend()
 
+    # （如果想看剪切分量，可解开）
+    # ax21.plot(x, Pyz, label="Pyz", linewidth=1, linestyle="--")
+    # ax21.plot(x, Pxz, label="Pxz", linewidth=1, linestyle="--")
+    # ax21.plot(x, Pxy, label="Pxy", linewidth=1, linestyle="--")
+
     # 子图4：晶格矢量分量
-    ax22.plot(x, ax, label="ax", linewidth=1)
-    ax22.plot(x, ay, label="ay", linewidth=1)
-    ax22.plot(x, az, label="az", linewidth=1)
-    ax22.plot(x, bx, label="bx", linewidth=1)
-    ax22.plot(x, by, label="by", linewidth=1)
-    ax22.plot(x, bz, label="bz", linewidth=1)
-    ax22.plot(x, cx, label="cx", linewidth=1)
-    ax22.plot(x, cy, label="cy", linewidth=1)
-    ax22.plot(x, cz, label="cz", linewidth=1)
+    ax22.plot(x, axv, label="ax", linewidth=1)
+    ax22.plot(x, ayv, label="ay", linewidth=1)
+    ax22.plot(x, azv, label="az", linewidth=1)
+    ax22.plot(x, bxv, label="bx", linewidth=1)
+    ax22.plot(x, byv, label="by", linewidth=1)
+    ax22.plot(x, bzv, label="bz", linewidth=1)
+    ax22.plot(x, cxv, label="cx", linewidth=1)
+    ax22.plot(x, cyv, label="cy", linewidth=1)
+    ax22.plot(x, czv, label="cz", linewidth=1)
     ax22.set_xlabel(x_label)
     ax22.set_ylabel("Lattice component")
     ax22.set_title("Lattice Vectors (components)")
