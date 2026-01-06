@@ -35,25 +35,55 @@ non_converged_files=()
 
 echo "Checking the convergence of OUTCARs ..."
 
-for file in $(find "$read_dire" -name "OUTCAR"); do
-    NSW=$(grep "number of steps for IOM" "$file" | awk '{print $3}')
+# Initialize a list for directories with no OUTCAR or non-converged ones
+non_converged_dirs=()
+
+for dir in $(find "$read_dire" -type d); do
+    outcar_file=$(find "$dir" -maxdepth 1 -name "OUTCAR")
+
+    # If the directory has no OUTCAR file, treat it as non-converged
+    if [ -z "$outcar_file" ]; then
+        non_converged_dirs+=("$dir")
+        continue
+    fi
+
+    # Process OUTCAR files for convergence
+    NSW=0
+    NELM=0
+    actual_steps=0
+    
+    # Get the number of steps for IOM and check for convergence
+    NSW=$(grep "number of steps for IOM" "$outcar_file" | awk '{print $3}')
+    if [ -z "$NSW" ]; then
+        NSW=0
+    fi
     
     if [ "$NSW" -ne 0 ]; then
-        converged_files+=("$file")
+        converged_files+=("$outcar_file")
         continue
     fi
     
-    NELM=$(grep "of ELM steps" "$file" | awk '{print $3}' | tr -d ';')
-    actual_steps=$(grep -c "Iteration" "$file")
+    NELM=$(grep "of ELM steps" "$outcar_file" | awk '{print $3}' | tr -d ';')
+    if [ -z "$NELM" ]; then
+        NELM=0
+    fi
+    
+    actual_steps=$(grep -c "Iteration" "$outcar_file")
+    if [ -z "$actual_steps" ]; then
+        actual_steps=0
+    fi
 
-    if grep -q "aborting loop because EDIFF is reached" "$file"; then
+    # Check if the loop aborted due to EDIFF
+    if grep -q "aborting loop because EDIFF is reached" "$outcar_file"; then
         if [ "$actual_steps" -lt "$NELM" ]; then
-            converged_files+=("$file")
+            converged_files+=("$outcar_file")
         else
-            non_converged_files+=("$file")
+            non_converged_files+=("$outcar_file")
+            non_converged_dirs+=("$dir")
         fi
     else
-        non_converged_files+=("$file")
+        non_converged_files+=("$outcar_file")
+        non_converged_dirs+=("$dir")
     fi
 done
 
@@ -64,8 +94,11 @@ echo "Total OUTCAR files: $total_outcar"
 echo "Converged OUTCAR files: $total_converged"
 echo "Non-converged OUTCAR files: $total_non_converged"
 
-# Write non-converged OUTCAR file paths to the error file
+# Print directories with no OUTCAR or non-converged ones
 if [ $total_non_converged -gt 0 ]; then
+    echo "The following directories are either empty or non-converged:"
+    printf "%s\n" "${non_converged_dirs[@]}" 
+    # Write non-converged OUTCAR file paths to the error file
     printf "%s\n" "${non_converged_files[@]}" > "$error_file"
 fi
 

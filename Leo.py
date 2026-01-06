@@ -142,7 +142,7 @@ TOOLS = {
             "help": "NEP select structure(Exyz format)",
             "desc": "封装 NEP/NEP-plot.py，用于绘制 NEP 的训练损失、力误差等结果。",
             "examples": [
-                "leo nep select sample.xyz train.xyz nep.txt",
+                "leo nep select sample.xyz train.xyz nep.txt mindist 0.02",
             ],
         },
         "single": {
