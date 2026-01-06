@@ -217,6 +217,14 @@ TOOLS = {
                 "leo MD rdf dump.xyz --fmt lammps --type-map 1:Cu,2:Se",
             ],
         },
+        "AIMD": {
+            "script": os.path.join("AIMD", "VASP-plot.py"),
+            "help": "Compute RDF g(r)",
+            "desc": "封装 MD/RDF.py，用于从 XDATCAR 或 LAMMPS dump 计算总 RDF 以及按类型分解的 RDF。",
+            "examples": [
+                "leo MD AIMD",
+            ],
+        },        
     },
 }
 
