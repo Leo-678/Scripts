@@ -4,28 +4,30 @@
 """
 Simple NVT RDF script
 =====================
+
 Supports:
 - VASP XDATCAR
 - LAMMPS dump
 
-Features:
-- NVT only
-- total RDF: all atoms treated as one species
-- partial RDF: type-resolved pair RDF
-- no interactive plotting; directly saves PNG and TXT
+Format detection:
+- filename containing "XDATCAR" -> VASP
+- otherwise -> LAMMPS dump
 
 Examples:
 ---------
-python RDF.py XDATCAR --fmt vasp --type 1:Cu,2:Se --frac 0.9 1.0 --cut 10
-python RDF.py dump.lammpstrj --fmt lmp --type 1:Cu,2:Se --frac 0.9 1.0 --cut 10
+python RDF.py XDATCAR --frac 0.9 1.0 --cut 10
+python RDF.py produc.traj --type 1:Cu,2:Se --frac 0.9 1.0 --cut 10
 """
 
 import argparse
 import numpy as np
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+
 from math import pi
+from pathlib import Path
 
 
 # =========================================================
@@ -41,6 +43,13 @@ def frac_to_cart(frac, lattice):
 
 def cart_to_frac(cart, lattice):
     return cart @ np.linalg.inv(lattice)
+
+
+def detect_format(path):
+    name = Path(path).name.upper()
+    if "XDATCAR" in name:
+        return "vasp"
+    return "lmp"
 
 
 # =========================================================
@@ -147,6 +156,7 @@ def parse_lammps_cell(bounds_line, bound_rows):
 
     if triclinic:
         xy, xz, yz = tilts
+
         lx = xhi - xlo
         ly = yhi - ylo
         lz = zhi - zlo
@@ -226,7 +236,7 @@ def read_lammps_all_frames(path):
                     float(parts[col["xs"]]),
                     float(parts[col["ys"]]),
                     float(parts[col["zs"]]),
-                ])
+                ], dtype=float)
                 pos[k] = frac_to_cart(frac, cell)
 
         frames.append((pos, typ, cell, volume))
@@ -280,7 +290,6 @@ def normalize_total(hist, edges, natoms, volume):
     shell = 4.0 * pi * r**2 * dr
     rho = natoms / volume
 
-    # total RDF 中 all_distances 已经包含 i->j 和 j->i
     g = hist / (natoms * rho * shell)
     return r, np.nan_to_num(g)
 
@@ -289,13 +298,11 @@ def normalize_partial(hist, edges, Na, Nb, volume, same_type=False):
     r = 0.5 * (edges[:-1] + edges[1:])
     dr = np.diff(edges)
     shell = 4.0 * pi * r**2 * dr
+    rho = Nb / volume
 
     if same_type:
-        # pair_distances 对同种只保留 i<j，因此这里乘 2
-        rho = Nb / volume
         g = 2.0 * hist / (Na * rho * shell)
     else:
-        rho = Nb / volume
         g = hist / (Na * rho * shell)
 
     return r, np.nan_to_num(g)
@@ -309,6 +316,7 @@ def parse_type_map(s):
     for item in s.split(","):
         k, v = item.split(":")
         out[int(k.strip())] = v.strip()
+
     return out
 
 
@@ -332,12 +340,9 @@ def main():
     parser = argparse.ArgumentParser(description="Simple NVT RDF calculator.")
 
     parser.add_argument("input", help="XDATCAR or LAMMPS dump file.")
-    parser.add_argument("--fmt", choices=["vasp", "lmp"], required=True,
-                        help="Input format: vasp for XDATCAR, lmp for LAMMPS dump.")
-    parser.add_argument("--type", default="",
-                        help="Type labels, e.g. '1:Cu,2:Se'.")
+    parser.add_argument("--type", default="", help="Type labels, e.g. '1:Cu,2:Se'.")
     parser.add_argument("--frac", nargs=2, type=float, default=[0.9, 1.0],
-                        help="Frame fraction range used for averaging. Default: 0.9 1.0")
+                        help="Frame fraction range. Default: 0.9 1.0")
     parser.add_argument("--cut", type=float, default=10.0,
                         help="RDF cutoff in Angstrom. Default: 10.0")
     parser.add_argument("--bin", type=int, default=300,
@@ -349,9 +354,10 @@ def main():
 
     args = parser.parse_args()
 
+    fmt = detect_format(args.input)
     type_labels = parse_type_map(args.type)
 
-    if args.fmt == "vasp":
+    if fmt == "vasp":
         frames, species = read_xdatcar_all_frames(args.input)
 
         if species is not None:
@@ -361,6 +367,7 @@ def main():
         frames = read_lammps_all_frames(args.input)
 
     nframes = len(frames)
+
     f0 = int(args.frac[0] * nframes)
     f1 = int(args.frac[1] * nframes)
 
@@ -372,9 +379,9 @@ def main():
 
     use = frames[f0:f1]
 
+    print(f"[INFO] Input format: {fmt}")
     print(f"[INFO] Total frames: {nframes}")
     print(f"[INFO] Using frames: {f0} to {f1 - 1}")
-    print(f"[INFO] NVT mode: using first-frame volume for normalization")
 
     pos0, typ0, cell0, volume0 = use[0]
     natoms = len(typ0)
@@ -418,10 +425,18 @@ def main():
     for (i, j), hist in partial_hist.items():
         Ni = int(np.sum(typ0 == i))
         Nj = int(np.sum(typ0 == j))
-        _, g = normalize_partial(hist, edges, Ni, Nj, volume0, same_type=(i == j))
+
+        _, g = normalize_partial(
+            hist,
+            edges,
+            Ni,
+            Nj,
+            volume0,
+            same_type=(i == j)
+        )
+
         partial_rdf[(i, j)] = g
 
-    # ---------- write txt ----------
     with open(args.txt, "w") as f:
         headers = ["r", "g_total"]
         headers += [
@@ -435,7 +450,6 @@ def main():
             row += [f"{partial_rdf[key][k]:.6f}" for key in partial_rdf.keys()]
             f.write(" ".join(row) + "\n")
 
-    # ---------- plot ----------
     nplot = 1 + len(partial_rdf)
     ncol = 2
     nrow = (nplot + ncol - 1) // ncol
