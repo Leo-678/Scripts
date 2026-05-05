@@ -2,23 +2,28 @@
 # -*- coding: utf-8 -*-
 
 """
-UNIFIED RDF SCRIPT
-==================
+Simple NVT RDF script
+=====================
 Supports:
-- XDATCAR (multi-frame, Direct/Cartesian)
-- LAMMPS dump (orthogonal / triclinic; x/xu or xs/ys/zs)
-- consistent averaging & normalization
-- total + partial RDF
-- one TXT + one PNG output
+- VASP XDATCAR
+- LAMMPS dump
+
+Features:
+- NVT only
+- total RDF: all atoms treated as one species
+- partial RDF: type-resolved pair RDF
+- no interactive plotting; directly saves PNG and TXT
 
 Examples:
 ---------
-python RDF.py XDATCAR --format xdatcar --frac 0.5 1.0 --cutoff 6
-python RDF.py dump.lammpstrj --format lammps --type 1:Cu,2:Se,3:Al --frac 0.9 1.0
+python RDF.py XDATCAR --fmt vasp --type 1:Cu,2:Se --frac 0.9 1.0 --cut 10
+python RDF.py dump.lammpstrj --fmt lmp --type 1:Cu,2:Se --frac 0.9 1.0 --cut 10
 """
 
-import numpy as np
 import argparse
+import numpy as np
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from math import pi
 
@@ -39,7 +44,7 @@ def cart_to_frac(cart, lattice):
 
 
 # =========================================================
-# XDATCAR reader (ALL frames)
+# XDATCAR reader
 # =========================================================
 def read_xdatcar_all_frames(path):
     with open(path, "r") as f:
@@ -49,6 +54,7 @@ def read_xdatcar_all_frames(path):
         raise ValueError("XDATCAR too short or malformed.")
 
     scale = float(lines[1])
+
     lattice = np.array([
         np.fromstring(lines[2], sep=" "),
         np.fromstring(lines[3], sep=" "),
@@ -71,7 +77,7 @@ def read_xdatcar_all_frames(path):
         counts = np.array([int(x) for x in lines[6].split()], dtype=int)
         idx = 6
 
-    N = int(counts.sum())
+    natoms = int(counts.sum())
     volume = abs(np.linalg.det(lattice))
 
     types = []
@@ -81,8 +87,10 @@ def read_xdatcar_all_frames(path):
 
     frames = []
     i = idx + 1
+
     while i < len(lines):
         low = lines[i].lower()
+
         if low.startswith("direct"):
             mode = "direct"
         elif low.startswith("cart"):
@@ -91,11 +99,11 @@ def read_xdatcar_all_frames(path):
             i += 1
             continue
 
-        if i + N >= len(lines):
+        if i + natoms >= len(lines):
             break
 
         coords = np.array(
-            [[float(x) for x in lines[i + 1 + j].split()[:3]] for j in range(N)],
+            [[float(x) for x in lines[i + 1 + j].split()[:3]] for j in range(natoms)],
             dtype=float
         )
 
@@ -105,33 +113,31 @@ def read_xdatcar_all_frames(path):
             pos = coords * scale
 
         frames.append((pos, types, lattice, volume))
-        i += N + 1
+        i += natoms + 1
 
     if not frames:
-        raise ValueError("No frames parsed from XDATCAR. Check file format.")
+        raise ValueError("No frames parsed from XDATCAR.")
 
     return frames, species
 
 
 # =========================================================
-# LAMMPS dump reader (ALL frames)
+# LAMMPS dump reader
 # =========================================================
-def _parse_lammps_cell(bounds_line, bound_rows):
+def parse_lammps_cell(bounds_line, bound_rows):
     triclinic = ("xy" in bounds_line) or ("xz" in bounds_line) or ("yz" in bounds_line)
 
     bounds = []
-    tilts = [0.0, 0.0, 0.0]  # xy, xz, yz
+    tilts = [0.0, 0.0, 0.0]
+
     for j in range(3):
         parts = list(map(float, bound_rows[j].split()))
+
         if triclinic:
-            if len(parts) < 3:
-                raise ValueError("Triclinic BOX BOUNDS row must have 3 numbers (lo hi tilt).")
             lo, hi, tilt = parts[:3]
             bounds.append((lo, hi))
             tilts[j] = tilt
         else:
-            if len(parts) < 2:
-                raise ValueError("Orthogonal BOX BOUNDS row must have 2 numbers (lo hi).")
             lo, hi = parts[:2]
             bounds.append((lo, hi))
 
@@ -144,6 +150,7 @@ def _parse_lammps_cell(bounds_line, bound_rows):
         lx = xhi - xlo
         ly = yhi - ylo
         lz = zhi - zlo
+
         cell = np.array([
             [lx, 0.0, 0.0],
             [xy, ly, 0.0],
@@ -161,69 +168,72 @@ def _parse_lammps_cell(bounds_line, bound_rows):
 
 
 def read_lammps_all_frames(path):
-    frames = []
     with open(path, "r") as f:
         lines = f.readlines()
 
+    frames = []
     i = 0
+
     while i < len(lines):
         if not lines[i].startswith("ITEM: TIMESTEP"):
             i += 1
             continue
-        if i + 9 >= len(lines):
-            break
 
         natoms = int(lines[i + 3].strip())
 
         bounds_line = lines[i + 4].strip()
         bound_rows = [lines[i + 5 + j].strip() for j in range(3)]
-        cell, volume = _parse_lammps_cell(bounds_line, bound_rows)
+        cell, volume = parse_lammps_cell(bounds_line, bound_rows)
 
         atoms_header = lines[i + 8].split()
-        if len(atoms_header) < 3 or atoms_header[0] != "ITEM:" or atoms_header[1] != "ATOMS":
+        if atoms_header[0] != "ITEM:" or atoms_header[1] != "ATOMS":
             raise ValueError("Unexpected LAMMPS dump format near ITEM: ATOMS.")
+
         header = atoms_header[2:]
         col = {h: k for k, h in enumerate(header)}
 
         if "type" not in col:
-            raise KeyError(f"No 'type' column in ITEM: ATOMS. Have: {list(col.keys())}")
+            raise KeyError("No 'type' column in LAMMPS dump.")
 
-        has_xyz = all(k in col for k in ("x", "y", "z"))
+        has_x = all(k in col for k in ("x", "y", "z"))
         has_xu = all(k in col for k in ("xu", "yu", "zu"))
         has_xs = all(k in col for k in ("xs", "ys", "zs"))
-        if not (has_xyz or has_xu or has_xs):
-            raise KeyError(
-                f"Cannot find coordinates (x/y/z, xu/yu/zu, or xs/ys/zs). Have: {list(col.keys())}"
-            )
 
-        pos = np.empty((natoms, 3), dtype=float)
-        typ = np.empty((natoms,), dtype=int)
+        if not (has_x or has_xu or has_xs):
+            raise KeyError("Need x/y/z, xu/yu/zu, or xs/ys/zs coordinates.")
+
+        pos = np.zeros((natoms, 3), dtype=float)
+        typ = np.zeros(natoms, dtype=int)
 
         for k in range(natoms):
             parts = lines[i + 9 + k].split()
             typ[k] = int(parts[col["type"]])
 
-            if has_xyz:
-                pos[k, 0] = float(parts[col["x"]])
-                pos[k, 1] = float(parts[col["y"]])
-                pos[k, 2] = float(parts[col["z"]])
+            if has_x:
+                pos[k] = [
+                    float(parts[col["x"]]),
+                    float(parts[col["y"]]),
+                    float(parts[col["z"]]),
+                ]
             elif has_xu:
-                pos[k, 0] = float(parts[col["xu"]])
-                pos[k, 1] = float(parts[col["yu"]])
-                pos[k, 2] = float(parts[col["zu"]])
+                pos[k] = [
+                    float(parts[col["xu"]]),
+                    float(parts[col["yu"]]),
+                    float(parts[col["zu"]]),
+                ]
             else:
                 frac = np.array([
                     float(parts[col["xs"]]),
                     float(parts[col["ys"]]),
                     float(parts[col["zs"]]),
-                ], dtype=float)
+                ])
                 pos[k] = frac_to_cart(frac, cell)
 
         frames.append((pos, typ, cell, volume))
         i += 9 + natoms
 
     if not frames:
-        raise ValueError("No frames parsed from LAMMPS dump. Check file format.")
+        raise ValueError("No frames parsed from LAMMPS dump.")
 
     return frames
 
@@ -231,183 +241,234 @@ def read_lammps_all_frames(path):
 # =========================================================
 # RDF core
 # =========================================================
-def distances_pbc(pos, cell):
+def all_distances(pos, cell):
     frac = cart_to_frac(pos, cell)
     df = frac[:, None, :] - frac[None, :, :]
     df = minimum_image(df)
     dc = df @ cell
-    return np.linalg.norm(dc, axis=-1)
-
-
-def partial_dist(pos, cell, typ, ta, tb):
-    pa = pos[typ == ta]
-    pb = pos[typ == tb]
-    if pa.size == 0 or pb.size == 0:
-        return np.empty((0,), dtype=float)
-
-    fa = cart_to_frac(pa, cell)
-    fb = cart_to_frac(pb, cell)
-    df = fa[:, None, :] - fb[None, :, :]
-    df = minimum_image(df)
-    dc = df @ cell
-    d = np.linalg.norm(dc, axis=-1).ravel()
+    d = np.linalg.norm(dc, axis=-1)
     return d[d > 0]
 
 
-def rdf_normalize(hist, edges, Na, Nb, volume):
+def pair_distances(pos, cell, typ, ta, tb):
+    pa = pos[typ == ta]
+    pb = pos[typ == tb]
+
+    if len(pa) == 0 or len(pb) == 0:
+        return np.array([])
+
+    fa = cart_to_frac(pa, cell)
+    fb = cart_to_frac(pb, cell)
+
+    df = fa[:, None, :] - fb[None, :, :]
+    df = minimum_image(df)
+    dc = df @ cell
+    d = np.linalg.norm(dc, axis=-1)
+
+    if ta == tb:
+        iu = np.triu_indices(len(pa), k=1)
+        d = d[iu]
+    else:
+        d = d.ravel()
+
+    return d[d > 0]
+
+
+def normalize_total(hist, edges, natoms, volume):
     r = 0.5 * (edges[:-1] + edges[1:])
     dr = np.diff(edges)
     shell = 4.0 * pi * r**2 * dr
-    rho = Nb / volume
-    shell = np.where(shell == 0.0, np.nan, shell)
-    g = hist / (Na * rho * shell)
-    g = np.nan_to_num(g, nan=0.0, posinf=0.0, neginf=0.0)
-    return r, g
+    rho = natoms / volume
+
+    # total RDF 中 all_distances 已经包含 i->j 和 j->i
+    g = hist / (natoms * rho * shell)
+    return r, np.nan_to_num(g)
+
+
+def normalize_partial(hist, edges, Na, Nb, volume, same_type=False):
+    r = 0.5 * (edges[:-1] + edges[1:])
+    dr = np.diff(edges)
+    shell = 4.0 * pi * r**2 * dr
+
+    if same_type:
+        # pair_distances 对同种只保留 i<j，因此这里乘 2
+        rho = Nb / volume
+        g = 2.0 * hist / (Na * rho * shell)
+    else:
+        rho = Nb / volume
+        g = hist / (Na * rho * shell)
+
+    return r, np.nan_to_num(g)
 
 
 def parse_type_map(s):
-    """
-    Parse: '1:Cu,2:Se,3:Al' -> {1:'Cu',2:'Se',3:'Al'}
-    Return None if s is None.
-    """
-    if s is None:
-        return None
-    s = s.strip()
-    if not s:
-        return None
-    m = {}
-    for chunk in s.split(","):
-        k, v = chunk.split(":")
-        m[int(k.strip())] = v.strip()
-    return m
+    if s is None or not s.strip():
+        return {}
+
+    out = {}
+    for item in s.split(","):
+        k, v = item.split(":")
+        out[int(k.strip())] = v.strip()
+    return out
+
+
+def label_type(t, type_labels):
+    return type_labels.get(t, str(t))
+
+
+def check_cutoff(cell, cutoff):
+    lengths = [np.linalg.norm(cell[i]) for i in range(3)]
+    half_min = 0.5 * min(lengths)
+
+    if cutoff > half_min:
+        print(f"[WARN] cutoff = {cutoff:.3f} Å > half minimum box length = {half_min:.3f} Å")
+        print("[WARN] RDF may be unreliable. Reduce --cut.")
 
 
 # =========================================================
-# MAIN
+# Main
 # =========================================================
 def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("input")
-    ap.add_argument("--format", choices=["xdatcar", "lammps"], required=True)
-    # 这里按你的要求：用 --type 直接承载 type-map
-    ap.add_argument("--type", default=None,
-                    help="Optional type mapping like '1:Cu,2:Se,3:Al' (for labels).")
-    ap.add_argument("--frac", nargs=2, type=float, default=[0.9, 1.0])
-    ap.add_argument("--cutoff", type=float, default=6.0)
-    ap.add_argument("--bins", type=int, default=300)
-    ap.add_argument("--out", default="rdf.png")
-    ap.add_argument("--txt", default="rdf.txt")
-    args = ap.parse_args()
+    parser = argparse.ArgumentParser(description="Simple NVT RDF calculator.")
 
-    # labels: prefer XDATCAR species if exists, then override with --type mapping if provided
-    type_labels = None
+    parser.add_argument("input", help="XDATCAR or LAMMPS dump file.")
+    parser.add_argument("--fmt", choices=["vasp", "lmp"], required=True,
+                        help="Input format: vasp for XDATCAR, lmp for LAMMPS dump.")
+    parser.add_argument("--type", default="",
+                        help="Type labels, e.g. '1:Cu,2:Se'.")
+    parser.add_argument("--frac", nargs=2, type=float, default=[0.9, 1.0],
+                        help="Frame fraction range used for averaging. Default: 0.9 1.0")
+    parser.add_argument("--cut", type=float, default=10.0,
+                        help="RDF cutoff in Angstrom. Default: 10.0")
+    parser.add_argument("--bin", type=int, default=300,
+                        help="Number of bins. Default: 300")
+    parser.add_argument("--out", default="rdf.png",
+                        help="Output PNG file. Default: rdf.png")
+    parser.add_argument("--txt", default="rdf.txt",
+                        help="Output TXT file. Default: rdf.txt")
 
-    # ---------- load ----------
-    if args.format == "xdatcar":
+    args = parser.parse_args()
+
+    type_labels = parse_type_map(args.type)
+
+    if args.fmt == "vasp":
         frames, species = read_xdatcar_all_frames(args.input)
+
         if species is not None:
-            type_labels = {i + 1: s for i, s in enumerate(species)}
+            for i, s in enumerate(species, start=1):
+                type_labels.setdefault(i, s)
     else:
         frames = read_lammps_all_frames(args.input)
 
-    # override / provide labels from --type map (your request)
-    user_map = parse_type_map(args.type)
-    if user_map is not None:
-        type_labels = user_map if type_labels is None else {**type_labels, **user_map}
-
     nframes = len(frames)
-    print(f"[INFO] total frames = {nframes}")
-
-    # avg window
     f0 = int(args.frac[0] * nframes)
     f1 = int(args.frac[1] * nframes)
+
     f0 = max(0, min(f0, nframes))
     f1 = max(0, min(f1, nframes))
-    if f1 <= f0:
-        raise ValueError(f"Empty averaging window: frames={nframes}, frac={args.frac}, f0={f0}, f1={f1}")
-    use = frames[f0:f1]
-    print(f"[INFO] using frames {f0}..{f1 - 1} ({len(use)})")
 
-    typ0 = use[0][1]
+    if f1 <= f0:
+        raise ValueError(f"Empty frame window: frac={args.frac}, frames={nframes}")
+
+    use = frames[f0:f1]
+
+    print(f"[INFO] Total frames: {nframes}")
+    print(f"[INFO] Using frames: {f0} to {f1 - 1}")
+    print(f"[INFO] NVT mode: using first-frame volume for normalization")
+
+    pos0, typ0, cell0, volume0 = use[0]
+    natoms = len(typ0)
     all_types = sorted(np.unique(typ0).tolist())
 
-    edges = np.linspace(0.0, args.cutoff, args.bins + 1)
-    total_hist = np.zeros(args.bins, dtype=float)
-    partial_hist = {(i, j): np.zeros(args.bins, dtype=float)
-                    for i in all_types for j in all_types if j >= i}
+    check_cutoff(cell0, args.cut)
 
-    # accumulate
-    for pos, typ, cell, vol in use:
-        d = distances_pbc(pos, cell).ravel()
-        d = d[(d > 0) & (d < args.cutoff)]
-        total_hist += np.histogram(d, edges)[0]
+    edges = np.linspace(0.0, args.cut, args.bin + 1)
+
+    total_hist = np.zeros(args.bin, dtype=float)
+    partial_hist = {
+        (i, j): np.zeros(args.bin, dtype=float)
+        for i in all_types
+        for j in all_types
+        if j >= i
+    }
+
+    for pos, typ, cell, volume in use:
+        d_all = all_distances(pos, cell)
+        d_all = d_all[d_all < args.cut]
+        total_hist += np.histogram(d_all, bins=edges)[0]
 
         for i in all_types:
             for j in all_types:
                 if j < i:
                     continue
-                dij = partial_dist(pos, cell, typ, i, j)
-                if dij.size == 0:
-                    continue
-                dij = dij[dij < args.cutoff]
-                partial_hist[(i, j)] += np.histogram(dij, edges)[0]
+
+                d_ij = pair_distances(pos, cell, typ, i, j)
+                d_ij = d_ij[d_ij < args.cut]
+                partial_hist[(i, j)] += np.histogram(d_ij, bins=edges)[0]
 
     nf = len(use)
     total_hist /= nf
-    for k in partial_hist:
-        partial_hist[k] /= nf
 
-    # normalize
-    volume = use[0][3]
-    Na_all = len(typ0)
-    r, gtot = rdf_normalize(total_hist, edges, Na_all, Na_all, volume)
+    for key in partial_hist:
+        partial_hist[key] /= nf
+
+    r, g_total = normalize_total(total_hist, edges, natoms, volume0)
 
     partial_rdf = {}
-    for (i, j), h in partial_hist.items():
+    for (i, j), hist in partial_hist.items():
         Ni = int(np.sum(typ0 == i))
         Nj = int(np.sum(typ0 == j))
-        _, g = rdf_normalize(h, edges, Ni, Nj, volume)
+        _, g = normalize_partial(hist, edges, Ni, Nj, volume0, same_type=(i == j))
         partial_rdf[(i, j)] = g
 
-    def _lab(t):
-        return type_labels.get(t, str(t)) if type_labels else str(t)
-
-    # output txt
+    # ---------- write txt ----------
     with open(args.txt, "w") as f:
-        f.write("r g_total " +
-                " ".join([f"g_{_lab(i)}-{_lab(j)}" for (i, j) in partial_rdf]) + "\n")
+        headers = ["r", "g_total"]
+        headers += [
+            f"g_{label_type(i, type_labels)}-{label_type(j, type_labels)}"
+            for (i, j) in partial_rdf.keys()
+        ]
+        f.write(" ".join(headers) + "\n")
+
         for k in range(len(r)):
-            row = [f"{r[k]:.6f}", f"{gtot[k]:.6f}"]
-            for ij in partial_rdf:
-                row.append(f"{partial_rdf[ij][k]:.6f}")
+            row = [f"{r[k]:.6f}", f"{g_total[k]:.6f}"]
+            row += [f"{partial_rdf[key][k]:.6f}" for key in partial_rdf.keys()]
             f.write(" ".join(row) + "\n")
 
-    # plot
-    n = 1 + len(partial_rdf)
+    # ---------- plot ----------
+    nplot = 1 + len(partial_rdf)
     ncol = 2
-    nrow = (n + ncol - 1) // ncol
-    fig, axs = plt.subplots(nrow, ncol, figsize=(10, 4 * nrow))
-    axs = np.array(axs).reshape(-1)
+    nrow = (nplot + ncol - 1) // ncol
 
-    axs[0].plot(r, gtot, lw=2)
-    axs[0].set_title("Total RDF")
+    fig, axes = plt.subplots(nrow, ncol, figsize=(10, 4 * nrow), dpi=200)
+    axes = np.array(axes).reshape(-1)
+
+    axes[0].plot(r, g_total, lw=2)
+    axes[0].set_title("Total RDF")
 
     idx = 1
     for (i, j), g in partial_rdf.items():
-        axs[idx].plot(r, g, lw=2)
-        axs[idx].set_title(f"g({_lab(i)}-{_lab(j)})")
+        li = label_type(i, type_labels)
+        lj = label_type(j, type_labels)
+
+        axes[idx].plot(r, g, lw=2)
+        axes[idx].set_title(f"g({li}-{lj})")
         idx += 1
 
-    for k in range(idx, len(axs)):
-        axs[k].set_visible(False)
-
-    for ax in axs[:idx]:
+    for ax in axes[:idx]:
         ax.set_xlabel("r (Å)")
         ax.set_ylabel("g(r)")
+        ax.grid(alpha=0.25)
+
+    for ax in axes[idx:]:
+        ax.set_visible(False)
 
     plt.tight_layout()
     plt.savefig(args.out, dpi=300)
-    print(f"[INFO] wrote {args.out}, {args.txt}")
+    plt.close(fig)
+
+    print(f"[INFO] Wrote {args.out}")
+    print(f"[INFO] Wrote {args.txt}")
 
 
 if __name__ == "__main__":
