@@ -1,52 +1,94 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+
 """
-从 LAMMPS log.lammps 里解析多轮 run 的 thermo_style custom 输出，
-并为每一轮生成一张 4 子图的大图：
+Plot LAMMPS thermo output from log.lammps.
 
-1) 温度 & 体积 vs step（双 y 轴）
-2) 总压 Press & 分压 Pxx/Pyy/Pzz vs step
-3) 动能 KinEng（左轴） vs 势能 PotEng/Enthalpy/TotEng（右轴）  <-- 已改为双 y 轴
-4) 晶格常数 cella/cellb/cellc & 晶格角 cellalpha/beta/gamma vs step（双 y 轴）
-
-适配命令：
+Supported thermo_style:
 thermo_style custom step temp press pxx pyy pzz pe ke enthalpy etotal vol \
-                          cella cellb cellc cellalpha cellbeta cellgamma
+                    cella cellb cellc cellalpha cellbeta cellgamma
 
-用法：
+Usage:
     python plt.py log.lammps
-    python plt.py log.lammps --prefix myrun
+    python plt.py log.lammps --prefix thermo
 """
 
 import re
 import sys
 import argparse
 import numpy as np
+
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-# ------------------ 工具函数：判断一个字符串是不是数字 ------------------ #
 
+# =========================================================
+# Global plot style
+# =========================================================
+plt.rcParams.update({
+    "font.size": 10,
+    "axes.titlesize": 12,
+    "axes.labelsize": 10,
+    "legend.fontsize": 8,
+    "xtick.labelsize": 9,
+    "ytick.labelsize": 9,
+    "figure.titlesize": 14,
+    "axes.linewidth": 1.0,
+})
+
+
+# =========================================================
+# Utilities
+# =========================================================
 _num_pattern = re.compile(r'^[-+]?\d+(\.\d*)?([eEdD][-+]?\d+)?$')
 
+
 def is_number(s: str) -> bool:
-    """判断字符串 s 是否是类似 1, -2.3, 4.5e-3, 1.0D+02 这样的数字。"""
     return bool(_num_pattern.match(s))
 
 
-# ------------------ 解析 log.lammps 中的 thermo 块 ------------------ #
+def smooth_if_needed(y, window=1):
+    """
+    当前默认不平滑。
+    如果以后想弱平滑，可以把 window 改成 3/5。
+    """
+    if window <= 1:
+        return y
 
+    y = np.asarray(y)
+    kernel = np.ones(window) / window
+    return np.convolve(y, kernel, mode="same")
+
+
+def set_common_grid(ax):
+    ax.grid(True, alpha=0.25, linewidth=0.6)
+    ax.tick_params(direction="in", top=True, right=True)
+
+
+def merge_legend(ax, ax_right=None, loc="best"):
+    lines, labels = ax.get_legend_handles_labels()
+
+    if ax_right is not None:
+        lines_r, labels_r = ax_right.get_legend_handles_labels()
+        lines += lines_r
+        labels += labels_r
+
+    ax.legend(
+        lines,
+        labels,
+        loc=loc,
+        frameon=True,
+        framealpha=0.88,
+        borderpad=0.6,
+        handlelength=2.6,
+    )
+
+
+# =========================================================
+# Parse LAMMPS log
+# =========================================================
 def parse_log_thermo_blocks(logfile):
-    """
-    解析 LAMMPS log 文件中的 thermo 输出块。
-
-    返回：
-        runs: list[(header, data)]
-            header: list[str]  数组列名，例如 ["Step","Temp","Press",...]
-            data  : np.ndarray shape (n_steps, n_cols)
-
-    对不完整 block（列数不统一 / 最后一行没写完）会自动忽略，
-    所以可以在 MD 还在运行时安全调用。
-    """
     with open(logfile, "r") as f:
         lines = f.read().splitlines()
 
@@ -57,70 +99,56 @@ def parse_log_thermo_blocks(logfile):
     while i < n:
         line = lines[i].strip()
 
-        # thermo block 一般以 "Step ..." 开头
         if line.startswith("Step"):
             header = line.split()
             ncols = len(header)
-            i += 1  # 移到数据行的第一行
+            i += 1
 
             data_rows = []
 
             while i < n:
                 s = lines[i].strip()
 
-                # 空行：认为当前 thermo block 结束
                 if not s:
                     i += 1
                     break
 
                 parts = s.split()
 
-                # 碰到新的 Step / Loop time / 非数字开头的行：结束当前 block
+                if not parts:
+                    i += 1
+                    break
+
                 if parts[0] in ("Step", "Loop"):
                     break
+
                 if not is_number(parts[0]):
                     break
 
-                # 列数不对：通常是最后一行没写完，结束当前 block（不再继续读）
                 if len(parts) != ncols:
                     break
 
-                # 尝试转成 float
                 try:
-                    row = [float(x.replace('D', 'E').replace('d', 'e')) for x in parts]
+                    row = [
+                        float(x.replace("D", "E").replace("d", "e"))
+                        for x in parts
+                    ]
                 except ValueError:
                     break
 
                 data_rows.append(row)
                 i += 1
 
-            # 如果这一轮有有效数据，就存下来；完全不完整的 block 丢弃
             if data_rows:
-                try:
-                    data = np.array(data_rows, dtype=float)
-                except ValueError:
-                    data = None
+                runs.append((header, np.array(data_rows, dtype=float)))
 
-                if data is not None:
-                    runs.append((header, data))
         else:
             i += 1
 
     return runs
 
 
-# ------------------ 从 header 中找到某个物理量的列索引 ------------------ #
-
 def build_col_finder(header):
-    """
-    传入 Thermo header，例如:
-        ["Step","Temp","Press","Pxx","Pyy","Pzz",
-         "PotEng","KinEng","Enthalpy","TotEng","Volume",
-         "Cella","Cellb","Cellc","CellAlpha","CellBeta","CellGamma"]
-
-    返回一个函数 find_col(name_list)：
-        给定一个“候选名字列表”，返回第一个匹配到的列号。
-    """
     header_lc = [h.lower() for h in header]
 
     def find_col(candidates, required=True):
@@ -128,27 +156,25 @@ def build_col_finder(header):
             cand_lc = cand.lower()
             if cand_lc in header_lc:
                 return header_lc.index(cand_lc)
+
         if required:
             raise KeyError(f"None of {candidates} found in thermo header: {header}")
-        else:
-            return None
+
+        return None
 
     return find_col
 
 
-# ------------------ 为每一轮 run 画图 ------------------ #
-
+# =========================================================
+# Plot one run
+# =========================================================
 def plot_one_run(run_index, header, data, prefix="thermo"):
-    """
-    对单轮 run 的 thermo 数据画图并保存。
-    """
-    if data.shape[0] < 2:
-        print(f"[warning] run {run_index} has less than 2 rows, skip plotting.")
+    if data.shape[0] < 5:
+        print(f"[warning] run {run_index} has only {data.shape[0]} thermo lines. Skip.")
         return
 
     find_col = build_col_finder(header)
 
-    # 提取需要的列索引
     idx_step     = find_col(["step"])
     idx_temp     = find_col(["temp"])
     idx_press    = find_col(["press"])
@@ -186,103 +212,169 @@ def plot_one_run(run_index, header, data, prefix="thermo"):
     cb       = data[:, idx_cb]
     cg       = data[:, idx_cg]
 
-    # ---- 画 2x2 子图 ---- #
-    fig, axes = plt.subplots(2, 2, figsize=(11, 8), dpi=200)
+    fig, axes = plt.subplots(2, 2, figsize=(12, 8.5), dpi=220)
     ax1, ax2, ax3, ax4 = axes.flatten()
 
-    # 1) 温度 + 体积（双 y 轴）
-    ax1.plot(step, temp, label="Temp (K)", color="C0")
+    # =====================================================
+    # 1) Temperature + Volume
+    # =====================================================
+    ax1.plot(step, temp, label="Temp", color="tab:blue", lw=1.2)
     ax1.set_xlabel("Step")
-    ax1.set_ylabel("Temp (K)", color="C0")
-    ax1.tick_params(axis="y", labelcolor="C0")
+    ax1.set_ylabel("Temperature (K)", color="tab:blue")
+    ax1.tick_params(axis="y", labelcolor="tab:blue")
+    ax1.set_title("Temperature & Volume")
+    set_common_grid(ax1)
 
     ax1b = ax1.twinx()
-    ax1b.plot(step, vol, label="Volume", color="C1")
-    ax1b.set_ylabel("Volume", color="C1")
-    ax1b.tick_params(axis="y", labelcolor="C1")
+    ax1b.plot(step, vol, label="Volume", color="tab:orange", lw=1.8)
+    ax1b.set_ylabel("Volume (Å³)", color="tab:orange")
+    ax1b.tick_params(axis="y", labelcolor="tab:orange")
+    ax1b.tick_params(direction="in")
 
-    ax1.set_title("Temperature & Volume vs Step")
+    merge_legend(ax1, ax1b, loc="best")
 
-    # 2) 总压 + 分压
-    ax2.plot(step, press, label="Press", linewidth=2.0, color="C0")
-    ax2.plot(step, pxx,   label="Pxx",  linestyle="--", color="C1")
-    ax2.plot(step, pyy,   label="Pyy",  linestyle="--", color="C2")
-    ax2.plot(step, pzz,   label="Pzz",  linestyle="--", color="C3")
+    # =====================================================
+    # 2) Pressure tensor
+    # =====================================================
+    ax2.plot(step, press, label="Press", color="tab:blue", lw=2.0)
+    ax2.plot(step, pxx, label="Pxx", color="tab:orange", lw=1.2, ls="--")
+    ax2.plot(step, pyy, label="Pyy", color="tab:green", lw=1.2, ls="-.")
+    ax2.plot(step, pzz, label="Pzz", color="tab:red", lw=1.2, ls=":")
+
+    ax2.axhline(0.0, color="black", lw=0.8, alpha=0.5)
     ax2.set_xlabel("Step")
-    ax2.set_ylabel("Pressure")
-    ax2.set_title("Pressure & Stress Components vs Step")
-    ax2.legend(fontsize=8)
+    ax2.set_ylabel("Pressure (bar)")
+    ax2.set_title("Pressure & Stress Components")
+    set_common_grid(ax2)
+    ax2.legend(loc="best", framealpha=0.88)
 
-    # 3) 能量：KinEng 左轴；PotEng/Enthalpy/TotEng 右轴（双 y 轴）
+    # =====================================================
+    # 3) Energies
+    # =====================================================
     ax3_left = ax3
     ax3_right = ax3_left.twinx()
 
-    # 左轴：动能（用蓝色）
-    lke, = ax3_left.plot(step, ke, label="KinEng", color="tab:blue", linewidth=1.2)
+    ax3_left.plot(step, ke, label="KinEng", color="tab:blue", lw=1.2)
     ax3_left.set_xlabel("Step")
     ax3_left.set_ylabel("KinEng", color="tab:blue")
     ax3_left.tick_params(axis="y", labelcolor="tab:blue")
+    ax3_left.set_title("Energies")
+    set_common_grid(ax3_left)
 
-    # 右轴：其他能量（用暖色系/不同颜色）
-    lpe, = ax3_right.plot(step, pe, label="PotEng", color="tab:red", linewidth=1.0)
-    lent, = ax3_right.plot(step, enthalpy, label="Enthalpy", color="tab:orange", linewidth=1.0)
-    letot, = ax3_right.plot(step, etotal, label="TotEng", color="tab:green", linewidth=1.0, linestyle="--")
-
+    ax3_right.plot(step, pe, label="PotEng", color="tab:red", lw=1.1)
+    ax3_right.plot(step, enthalpy, label="Enthalpy", color="tab:orange", lw=1.1)
+    ax3_right.plot(step, etotal, label="TotEng", color="tab:green", lw=1.1, ls="--")
     ax3_right.set_ylabel("PotEng / Enthalpy / TotEng", color="tab:red")
     ax3_right.tick_params(axis="y", labelcolor="tab:red")
+    ax3_right.tick_params(direction="in")
 
-    ax3_left.set_title("Energies vs Step (KinEng left, others right)")
+    merge_legend(ax3_left, ax3_right, loc="best")
 
-    # 合并 legend（左+右）
-    lines = [lke, lpe, lent, letot]
-    labels = [ln.get_label() for ln in lines]
-    ax3_left.legend(lines, labels, fontsize=8, loc="best")
+    # =====================================================
+    # 4) Lattice constants + angles
+    # =====================================================
+    # cella/cellb/cellc 使用不同线型，避免重合时看不清
+    ax4.plot(
+        step, cella,
+        label="cella",
+        color="tab:blue",
+        lw=2.0,
+        ls="-",
+        zorder=3,
+    )
 
-    # 4) 晶格常数 + 晶格角（双 y 轴）
-    ax4.plot(step, cella, label="cella", color="C0")
-    ax4.plot(step, cellb, label="cellb", color="C1")
-    ax4.plot(step, cellc, label="cellc", color="C2")
+    ax4.plot(
+        step, cellb,
+        label="cellb",
+        color="tab:orange",
+        lw=2.0,
+        ls="--",
+        zorder=4,
+    )
+
+    ax4.plot(
+        step, cellc,
+        label="cellc",
+        color="tab:green",
+        lw=2.5,
+        ls=":",
+        zorder=5,
+    )
+
     ax4.set_xlabel("Step")
-    ax4.set_ylabel("Lattice constants (Å)", color="C0")
-    ax4.tick_params(axis="y", labelcolor="C0")
+    ax4.set_ylabel("Lattice constants (Å)", color="tab:blue")
+    ax4.tick_params(axis="y", labelcolor="tab:blue")
+    ax4.set_title("Lattice Constants & Angles")
+    set_common_grid(ax4)
 
     ax4b = ax4.twinx()
-    ax4b.plot(step, ca, label="alpha", linestyle="--", color="C3")
-    ax4b.plot(step, cb, label="beta",  linestyle="--", color="C4")
-    ax4b.plot(step, cg, label="gamma", linestyle="--", color="C5")
-    ax4b.set_ylabel("Lattice angles (deg)", color="C3")
-    ax4b.tick_params(axis="y", labelcolor="C3")
 
-    # 合并左右 y 轴 legend
-    lines_left,  labels_left  = ax4.get_legend_handles_labels()
-    lines_right, labels_right = ax4b.get_legend_handles_labels()
-    ax4.legend(lines_left + lines_right, labels_left + labels_right,
-               fontsize=8, loc="best")
-    ax4.set_title("Lattice constants & angles vs Step")
+    ax4b.plot(
+        step, ca,
+        label="alpha",
+        color="tab:red",
+        lw=1.4,
+        ls="-.",
+        alpha=0.72,
+        zorder=1,
+    )
 
-    fig.suptitle(f"Thermo summary of run {run_index}", fontsize=14)
+    ax4b.plot(
+        step, cb,
+        label="beta",
+        color="tab:purple",
+        lw=1.4,
+        ls="--",
+        alpha=0.72,
+        zorder=1,
+    )
+
+    ax4b.plot(
+        step, cg,
+        label="gamma",
+        color="tab:brown",
+        lw=1.6,
+        ls=":",
+        alpha=0.72,
+        zorder=1,
+    )
+
+    ax4b.set_ylabel("Lattice angles (deg)", color="tab:red")
+    ax4b.tick_params(axis="y", labelcolor="tab:red")
+    ax4b.tick_params(direction="in")
+
+    merge_legend(ax4, ax4b, loc="upper left")
+
+    fig.suptitle(f"Thermo summary of run {run_index}", y=0.985)
     fig.tight_layout(rect=[0, 0, 1, 0.96])
 
     outname = f"{prefix}_run{run_index}.png"
-    plt.savefig(outname, dpi=300)
+    fig.savefig(outname, dpi=300)
     plt.close(fig)
+
     print(f"Saved figure for run {run_index}: {outname}")
 
 
-# ------------------ 主程序 ------------------ #
-
+# =========================================================
+# Main
+# =========================================================
 def main():
     parser = argparse.ArgumentParser(
         description="Plot multiple LAMMPS thermo runs from log.lammps"
     )
     parser.add_argument("logfile", help="LAMMPS log file, e.g. log.lammps")
-    parser.add_argument("--prefix", default="thermo",
-                        help="Prefix for output figures (default: thermo)")
+    parser.add_argument(
+        "--prefix",
+        default="thermo",
+        help="Prefix for output figures. Default: thermo"
+    )
+
     args = parser.parse_args()
 
     runs = parse_log_thermo_blocks(args.logfile)
+
     if not runs:
-        print("No complete thermo blocks (Step ... ) found in log file.")
+        print("No complete thermo blocks found.")
         sys.exit(0)
 
     print(f"Detected {len(runs)} thermo run(s).")
