@@ -2,16 +2,16 @@
 # -*- coding: utf-8 -*-
 
 """
-Simple NVT RDF script
-=====================
+Fast NVT RDF script
+===================
 
 Supports:
 - VASP XDATCAR
 - LAMMPS dump
 
-Format detection:
-- filename containing "XDATCAR" -> VASP
-- otherwise -> LAMMPS dump
+Fast path:
+- Orthogonal cells use scipy.spatial.cKDTree
+- Triclinic cells fall back to brute-force calculation
 
 Examples:
 ---------
@@ -20,19 +20,30 @@ python RDF.py produc.traj --type 1:Cu,2:Se --frac 0.9 1.0 --cut 10
 """
 
 import argparse
-import numpy as np
-import matplotlib
+from pathlib import Path
+from math import pi
 
+import numpy as np
+
+import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from math import pi
-from pathlib import Path
+try:
+    from scipy.spatial import cKDTree
+    HAS_SCIPY = True
+except Exception:
+    HAS_SCIPY = False
 
 
 # =========================================================
-# PBC utilities
+# Basic utilities
 # =========================================================
+def detect_format(path):
+    name = Path(path).name.upper()
+    return "vasp" if "XDATCAR" in name else "lmp"
+
+
 def minimum_image(df_frac):
     return df_frac - np.round(df_frac)
 
@@ -45,11 +56,32 @@ def cart_to_frac(cart, lattice):
     return cart @ np.linalg.inv(lattice)
 
 
-def detect_format(path):
-    name = Path(path).name.upper()
-    if "XDATCAR" in name:
-        return "vasp"
-    return "lmp"
+def is_orthogonal(cell, tol=1e-10):
+    offdiag = cell.copy()
+    np.fill_diagonal(offdiag, 0.0)
+    return np.max(np.abs(offdiag)) < tol
+
+
+def parse_type_map(s):
+    if s is None or not s.strip():
+        return {}
+    out = {}
+    for item in s.split(","):
+        k, v = item.split(":")
+        out[int(k.strip())] = v.strip()
+    return out
+
+
+def label_type(t, type_labels):
+    return type_labels.get(t, str(t))
+
+
+def check_cutoff(cell, cutoff):
+    lengths = [np.linalg.norm(cell[i]) for i in range(3)]
+    half_min = 0.5 * min(lengths)
+    if cutoff > half_min:
+        print(f"[WARN] cutoff = {cutoff:.3f} Å > half minimum box length = {half_min:.3f} Å")
+        print("[WARN] RDF may be unreliable. Reduce --cut.")
 
 
 # =========================================================
@@ -63,7 +95,6 @@ def read_xdatcar_all_frames(path):
         raise ValueError("XDATCAR too short or malformed.")
 
     scale = float(lines[1])
-
     lattice = np.array([
         np.fromstring(lines[2], sep=" "),
         np.fromstring(lines[3], sep=" "),
@@ -121,7 +152,7 @@ def read_xdatcar_all_frames(path):
         else:
             pos = coords * scale
 
-        frames.append((pos, types, lattice, volume))
+        frames.append((pos, types, lattice, volume, np.zeros(3)))
         i += natoms + 1
 
     if not frames:
@@ -141,7 +172,6 @@ def parse_lammps_cell(bounds_line, bound_rows):
 
     for j in range(3):
         parts = list(map(float, bound_rows[j].split()))
-
         if triclinic:
             lo, hi, tilt = parts[:3]
             bounds.append((lo, hi))
@@ -154,13 +184,13 @@ def parse_lammps_cell(bounds_line, bound_rows):
     ylo, yhi = bounds[1]
     zlo, zhi = bounds[2]
 
+    origin = np.array([xlo, ylo, zlo], dtype=float)
+
     if triclinic:
         xy, xz, yz = tilts
-
         lx = xhi - xlo
         ly = yhi - ylo
         lz = zhi - zlo
-
         cell = np.array([
             [lx, 0.0, 0.0],
             [xy, ly, 0.0],
@@ -174,7 +204,7 @@ def parse_lammps_cell(bounds_line, bound_rows):
         ], dtype=float)
 
     volume = abs(np.linalg.det(cell))
-    return cell, volume
+    return cell, volume, origin
 
 
 def read_lammps_all_frames(path):
@@ -193,7 +223,7 @@ def read_lammps_all_frames(path):
 
         bounds_line = lines[i + 4].strip()
         bound_rows = [lines[i + 5 + j].strip() for j in range(3)]
-        cell, volume = parse_lammps_cell(bounds_line, bound_rows)
+        cell, volume, origin = parse_lammps_cell(bounds_line, bound_rows)
 
         atoms_header = lines[i + 8].split()
         if atoms_header[0] != "ITEM:" or atoms_header[1] != "ATOMS":
@@ -237,9 +267,9 @@ def read_lammps_all_frames(path):
                     float(parts[col["ys"]]),
                     float(parts[col["zs"]]),
                 ], dtype=float)
-                pos[k] = frac_to_cart(frac, cell)
+                pos[k] = origin + frac_to_cart(frac, cell)
 
-        frames.append((pos, typ, cell, volume))
+        frames.append((pos, typ, cell, volume, origin))
         i += 9 + natoms
 
     if not frames:
@@ -249,95 +279,87 @@ def read_lammps_all_frames(path):
 
 
 # =========================================================
-# RDF core
+# Fast RDF per frame
 # =========================================================
-def all_distances(pos, cell):
-    frac = cart_to_frac(pos, cell)
+def wrap_to_cell(pos, cell, origin):
+    frac = cart_to_frac(pos - origin, cell)
+    frac = frac - np.floor(frac)
+    return frac_to_cart(frac, cell)
+
+
+def frame_pairs_kdtree(pos, typ, cell, origin, cutoff):
+    lengths = np.diag(cell).astype(float)
+    wrapped = wrap_to_cell(pos, cell, origin)
+
+    tree = cKDTree(wrapped, boxsize=lengths)
+    pairs = tree.query_pairs(cutoff, output_type="ndarray")
+
+    if pairs.size == 0:
+        return np.empty(0), np.empty((0, 2), dtype=int)
+
+    delta = wrapped[pairs[:, 0]] - wrapped[pairs[:, 1]]
+    delta -= lengths * np.round(delta / lengths)
+
+    dist = np.linalg.norm(delta, axis=1)
+    pair_types = np.sort(np.column_stack([typ[pairs[:, 0]], typ[pairs[:, 1]]]), axis=1)
+
+    return dist, pair_types
+
+
+def frame_pairs_bruteforce(pos, typ, cell, origin, cutoff):
+    frac = cart_to_frac(pos - origin, cell)
+    frac = frac - np.floor(frac)
+
     df = frac[:, None, :] - frac[None, :, :]
     df = minimum_image(df)
     dc = df @ cell
-    d = np.linalg.norm(dc, axis=-1)
-    return d[d > 0]
+    dmat = np.linalg.norm(dc, axis=-1)
+
+    iu = np.triu_indices(len(pos), k=1)
+    dist = dmat[iu]
+
+    mask = dist < cutoff
+    dist = dist[mask]
+
+    t1 = typ[iu[0]][mask]
+    t2 = typ[iu[1]][mask]
+    pair_types = np.sort(np.column_stack([t1, t2]), axis=1)
+
+    return dist, pair_types
 
 
-def pair_distances(pos, cell, typ, ta, tb):
-    pa = pos[typ == ta]
-    pb = pos[typ == tb]
-
-    if len(pa) == 0 or len(pb) == 0:
-        return np.array([])
-
-    fa = cart_to_frac(pa, cell)
-    fb = cart_to_frac(pb, cell)
-
-    df = fa[:, None, :] - fb[None, :, :]
-    df = minimum_image(df)
-    dc = df @ cell
-    d = np.linalg.norm(dc, axis=-1)
-
-    if ta == tb:
-        iu = np.triu_indices(len(pa), k=1)
-        d = d[iu]
-    else:
-        d = d.ravel()
-
-    return d[d > 0]
-
-
-def normalize_total(hist, edges, natoms, volume):
+def normalize_total(hist_unique, edges, natoms, volume):
     r = 0.5 * (edges[:-1] + edges[1:])
     dr = np.diff(edges)
     shell = 4.0 * pi * r**2 * dr
     rho = natoms / volume
 
-    g = hist / (natoms * rho * shell)
+    # hist_unique contains each unordered pair only once.
+    g = 2.0 * hist_unique / (natoms * rho * shell)
     return r, np.nan_to_num(g)
 
 
-def normalize_partial(hist, edges, Na, Nb, volume, same_type=False):
+def normalize_partial(hist_unique, edges, Na, Nb, volume, same_type):
     r = 0.5 * (edges[:-1] + edges[1:])
     dr = np.diff(edges)
     shell = 4.0 * pi * r**2 * dr
     rho = Nb / volume
 
     if same_type:
-        g = 2.0 * hist / (Na * rho * shell)
+        # Same-type histogram contains each unordered pair once.
+        g = 2.0 * hist_unique / (Na * rho * shell)
     else:
-        g = hist / (Na * rho * shell)
+        # Cross-type histogram contains Ni * Nj unordered pairs once.
+        g = hist_unique / (Na * rho * shell)
 
     return r, np.nan_to_num(g)
-
-
-def parse_type_map(s):
-    if s is None or not s.strip():
-        return {}
-
-    out = {}
-    for item in s.split(","):
-        k, v = item.split(":")
-        out[int(k.strip())] = v.strip()
-
-    return out
-
-
-def label_type(t, type_labels):
-    return type_labels.get(t, str(t))
-
-
-def check_cutoff(cell, cutoff):
-    lengths = [np.linalg.norm(cell[i]) for i in range(3)]
-    half_min = 0.5 * min(lengths)
-
-    if cutoff > half_min:
-        print(f"[WARN] cutoff = {cutoff:.3f} Å > half minimum box length = {half_min:.3f} Å")
-        print("[WARN] RDF may be unreliable. Reduce --cut.")
 
 
 # =========================================================
 # Main
 # =========================================================
 def main():
-    parser = argparse.ArgumentParser(description="Simple NVT RDF calculator.")
+    parser = argparse.ArgumentParser(description="Fast NVT RDF calculator.")
 
     parser.add_argument("input", help="XDATCAR or LAMMPS dump file.")
     parser.add_argument("--type", default="", help="Type labels, e.g. '1:Cu,2:Se'.")
@@ -359,7 +381,6 @@ def main():
 
     if fmt == "vasp":
         frames, species = read_xdatcar_all_frames(args.input)
-
         if species is not None:
             for i, s in enumerate(species, start=1):
                 type_labels.setdefault(i, s)
@@ -370,7 +391,6 @@ def main():
 
     f0 = int(args.frac[0] * nframes)
     f1 = int(args.frac[1] * nframes)
-
     f0 = max(0, min(f0, nframes))
     f1 = max(0, min(f1, nframes))
 
@@ -379,15 +399,18 @@ def main():
 
     use = frames[f0:f1]
 
-    print(f"[INFO] Input format: {fmt}")
-    print(f"[INFO] Total frames: {nframes}")
-    print(f"[INFO] Using frames: {f0} to {f1 - 1}")
-
-    pos0, typ0, cell0, volume0 = use[0]
+    pos0, typ0, cell0, volume0, origin0 = use[0]
     natoms = len(typ0)
     all_types = sorted(np.unique(typ0).tolist())
 
     check_cutoff(cell0, args.cut)
+
+    use_kdtree = HAS_SCIPY and is_orthogonal(cell0)
+
+    print(f"[INFO] Input format: {fmt}")
+    print(f"[INFO] Total frames: {nframes}")
+    print(f"[INFO] Using frames: {f0} to {f1 - 1} ({len(use)} frames)")
+    print(f"[INFO] Method: {'cKDTree' if use_kdtree else 'brute force fallback'}")
 
     edges = np.linspace(0.0, args.cut, args.bin + 1)
 
@@ -399,33 +422,36 @@ def main():
         if j >= i
     }
 
-    for pos, typ, cell, volume in use:
-        d_all = all_distances(pos, cell)
-        d_all = d_all[d_all < args.cut]
-        total_hist += np.histogram(d_all, bins=edges)[0]
-
-        for i in all_types:
-            for j in all_types:
-                if j < i:
-                    continue
-
-                d_ij = pair_distances(pos, cell, typ, i, j)
-                d_ij = d_ij[d_ij < args.cut]
-                partial_hist[(i, j)] += np.histogram(d_ij, bins=edges)[0]
-
     nf = len(use)
-    total_hist /= nf
 
+    for iframe, (pos, typ, cell, volume, origin) in enumerate(use, start=1):
+        if use_kdtree:
+            dist, pair_types = frame_pairs_kdtree(pos, typ, cell, origin, args.cut)
+        else:
+            dist, pair_types = frame_pairs_bruteforce(pos, typ, cell, origin, args.cut)
+
+        total_hist += np.histogram(dist, bins=edges)[0]
+
+        for key in partial_hist:
+            i, j = key
+            mask = (pair_types[:, 0] == i) & (pair_types[:, 1] == j)
+            if np.any(mask):
+                partial_hist[key] += np.histogram(dist[mask], bins=edges)[0]
+
+        if iframe % max(1, nf // 10) == 0 or iframe == nf:
+            print(f"[INFO] Processed {iframe}/{nf} frames")
+
+    total_hist /= nf
     for key in partial_hist:
         partial_hist[key] /= nf
 
     r, g_total = normalize_total(total_hist, edges, natoms, volume0)
 
     partial_rdf = {}
-    for (i, j), hist in partial_hist.items():
+    for key, hist in partial_hist.items():
+        i, j = key
         Ni = int(np.sum(typ0 == i))
         Nj = int(np.sum(typ0 == j))
-
         _, g = normalize_partial(
             hist,
             edges,
@@ -434,8 +460,7 @@ def main():
             volume0,
             same_type=(i == j)
         )
-
-        partial_rdf[(i, j)] = g
+        partial_rdf[key] = g
 
     with open(args.txt, "w") as f:
         headers = ["r", "g_total"]
