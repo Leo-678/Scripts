@@ -2,28 +2,34 @@
 # -*- coding: utf-8 -*-
 
 """
-Generate vacancies for VASP POSCAR/CONTCAR or LAMMPS data files.
+Generate vacancy structures for VASP POSCAR/CONTCAR or LAMMPS data files.
 
-Usage examples:
+Main features
+-------------
+1. Supports VASP and LAMMPS data input.
+2. Supports VASP and LAMMPS data output independently.
+3. For LAMMPS output:
+   - writes Masses section;
+   - preserves atom IDs as consecutive IDs;
+   - supports explicit type order with --specorder;
+   - supports extra unused atom types with --extra-elements.
 
-    # VASP
-    python make_vacancy.py POSCAR Cu 4 --format vasp --seed 123
+Examples
+--------
+VASP -> VASP:
+    python POS-Remove.py POSCAR Cu 52 -o POSCAR_CuVac
 
-    # LAMMPS
-    python make_vacancy.py supercell.lammps Cu 4 --format lammps --seed 123
+VASP -> LAMMPS data:
+    python POS-Remove.py perfect.pos Cu 52 -o supercell.lammps --output-format lammps-data --specorder Cu Se
 
-    # Auto detect format
-    python make_vacancy.py POSCAR Cu 4 --seed 123
-    python make_vacancy.py supercell.lammps Cu 4 --seed 123
+VASP -> LAMMPS data with dopant type reserved:
+    python POS-Remove.py perfect.pos Cu 52 -o supercell.lammps --output-format lammps-data --specorder Cu Se Ag
 
-    # Specify output
-    python make_vacancy.py POSCAR Cu 4 -o POSCAR_CuVac4
-    python make_vacancy.py supercell.lammps Cu 4 -o data_CuVac4.lammps
-
-Requirements:
-    - LAMMPS Masses section should contain element comments, e.g.
-        1 63.546 # Cu
-        2 78.960 # Se
+In your loop:
+    python POS-Remove.py perfect.pos Cu 52 -o supercell.lammps \\
+        --output-format lammps-data \\
+        --specorder Cu Se ${elem} \\
+        --seed ${seed}
 """
 
 import argparse
@@ -32,538 +38,387 @@ import re
 import sys
 from pathlib import Path
 
+from ase.io import read, write
+from ase.data import atomic_masses, atomic_numbers
+
 
 # ============================================================
-# Generic helpers
+# Utilities
 # ============================================================
 
 def die(msg):
     sys.exit(f"[ERROR] {msg}")
 
 
-def is_float(s):
-    try:
-        float(s)
-        return True
-    except Exception:
-        return False
-
-
-def detect_format(path):
+def detect_input_format(path):
     """
-    Roughly detect file format.
-
-    VASP POSCAR:
-        line 2 is scale factor
-        lines 3-5 are lattice vectors
-        line 6 usually element symbols
-
-    LAMMPS data:
-        contains lines such as:
-            atoms
-            xlo xhi
-            Masses
-            Atoms
+    Detect input file format.
     """
-    lines = Path(path).read_text(errors="ignore").splitlines()
+    text = Path(path).read_text(errors="ignore")
+    low = text.lower()
 
-    joined_lower = "\n".join(lines[:80]).lower()
+    if "xlo xhi" in low and "atoms" in low:
+        return "lammps-data"
 
-    if "xlo xhi" in joined_lower and "ylo yhi" in joined_lower and "atoms" in joined_lower:
-        return "lammps"
-
-    if len(lines) >= 8:
-        if is_float(lines[1].split()[0]):
-            return "vasp"
-
-    die("Could not auto-detect format. Please use --format vasp or --format lammps.")
+    return "vasp"
 
 
-# ============================================================
-# VASP POSCAR handling
-# ============================================================
-
-def read_poscar(path):
+def detect_output_format(output_file, input_format):
     """
-    Read VASP POSCAR/CONTCAR.
+    Detect output format from output filename.
 
-    Supports:
-        - VASP5 element line
-        - Selective dynamics
-        - Direct / Cartesian coordinates
-
-    Returns dict.
+    If unclear, use same format as input.
     """
-    lines = Path(path).read_text().splitlines()
+    if output_file is None:
+        return input_format
 
-    if len(lines) < 8:
-        die("POSCAR seems too short.")
+    name = Path(output_file).name.lower()
 
-    title = lines[0].rstrip()
-    scale = lines[1].rstrip()
-    lattice = [lines[i].rstrip() for i in range(2, 5)]
+    if (
+        name.endswith(".lmp")
+        or name.endswith(".lammps")
+        or name.startswith("data")
+        or ".data" in name
+    ):
+        return "lammps-data"
 
-    line5 = lines[5].split()
-    line6 = lines[6].split()
+    if (
+        name.startswith("poscar")
+        or name.startswith("contcar")
+        or name.endswith(".pos")
+        or name.endswith(".vasp")
+    ):
+        return "vasp"
 
-    # VASP5 format: line 5 = element names, line 6 = counts
-    if all(tok.isalpha() or re.match(r"^[A-Z][a-z]?$", tok) for tok in line5) and all(tok.isdigit() for tok in line6):
-        elements = line5
-        counts = list(map(int, line6))
-        idx = 7
+    return input_format
+
+
+def first_occurrence_order(symbols):
+    """
+    Get element order by first appearance.
+    """
+    order = []
+
+    for s in symbols:
+        if s not in order:
+            order.append(s)
+
+    return order
+
+
+def normalize_specorder(specorder, extra_elements, symbols_before_delete):
+    """
+    Determine final LAMMPS element/type order.
+
+    Priority:
+        1. user --specorder
+        2. first appearance in input structure
+        3. append --extra-elements
+    """
+    if specorder is not None and len(specorder) > 0:
+        final = list(specorder)
     else:
+        final = first_occurrence_order(symbols_before_delete)
+
+    if extra_elements is not None:
+        for e in extra_elements:
+            if e not in final:
+                final.append(e)
+
+    return final
+
+
+def sort_atoms_by_specorder(atoms, specorder):
+    """
+    Sort atoms according to specorder.
+
+    This ensures type order is clean, e.g.
+        Cu first, Se second, Ag third.
+    """
+    symbols = atoms.get_chemical_symbols()
+
+    rank = {s: i for i, s in enumerate(specorder)}
+
+    missing = sorted(set(symbols) - set(specorder))
+
+    if missing:
         die(
-            "Only VASP5 POSCAR with element symbols is supported. "
-            "Expected line 6 elements and line 7 counts."
+            f"Atoms contain elements not in specorder: {missing}\n"
+            f"Current specorder = {specorder}"
         )
 
-    selective = False
-    selective_line = None
+    order = sorted(
+        range(len(atoms)),
+        key=lambda i: (rank[symbols[i]], i)
+    )
 
-    if lines[idx].strip().lower().startswith("s"):
-        selective = True
-        selective_line = lines[idx].rstrip()
-        idx += 1
-
-    coord_type = lines[idx].rstrip()
-    idx += 1
-
-    total_atoms = sum(counts)
-
-    if len(lines) < idx + total_atoms:
-        die(f"POSCAR atom count mismatch. Expected {total_atoms} coordinate lines.")
-
-    positions = [lines[i].rstrip() for i in range(idx, idx + total_atoms)]
-    tail = [line.rstrip() for line in lines[idx + total_atoms:]]
-
-    return {
-        "title": title,
-        "scale": scale,
-        "lattice": lattice,
-        "elements": elements,
-        "counts": counts,
-        "selective": selective,
-        "selective_line": selective_line,
-        "coord_type": coord_type,
-        "positions": positions,
-        "tail": tail,
-    }
+    return atoms[order]
 
 
-def write_poscar(path, data):
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(data["title"] + "\n")
-        f.write(data["scale"] + "\n")
-
-        for line in data["lattice"]:
-            f.write(line + "\n")
-
-        f.write(" ".join(data["elements"]) + "\n")
-        f.write(" ".join(str(x) for x in data["counts"]) + "\n")
-
-        if data["selective"]:
-            f.write(data["selective_line"] + "\n")
-
-        f.write(data["coord_type"] + "\n")
-
-        for line in data["positions"]:
-            f.write(line + "\n")
-
-        for line in data.get("tail", []):
-            f.write(line + "\n")
-
-
-def remove_vasp_atoms(input_path, element, num_remove, output_path, seed):
-    data = read_poscar(input_path)
-
-    elements = data["elements"]
-    counts = data["counts"]
-    positions = data["positions"]
-
-    if element not in elements:
-        die(f"Element {element} not found in POSCAR. Available: {elements}")
-
-    elem_idx = elements.index(element)
-
-    n_available = counts[elem_idx]
-
-    if num_remove > n_available:
-        die(f"Cannot remove {num_remove} {element}; only {n_available} available.")
-
-    start = sum(counts[:elem_idx])
-    end = start + counts[elem_idx]
-
-    rng = random.Random(seed)
-    remove_indices = set(rng.sample(range(start, end), num_remove))
-
-    new_positions = [
-        line for i, line in enumerate(positions)
-        if i not in remove_indices
-    ]
-
-    new_counts = counts[:]
-    new_counts[elem_idx] -= num_remove
-
-    # Remove element completely if count becomes zero.
-    new_elements = []
-    compact_counts = []
-
-    for elem, cnt in zip(elements, new_counts):
-        if cnt > 0:
-            new_elements.append(elem)
-            compact_counts.append(cnt)
-
-    data["elements"] = new_elements
-    data["counts"] = compact_counts
-    data["positions"] = new_positions
-    data["title"] = f"{data['title']} | removed {num_remove} {element} vacancy seed={seed}"
-
-    write_poscar(output_path, data)
-
-    return {
-        "format": "vasp",
-        "element": element,
-        "removed": num_remove,
-        "available_before": n_available,
-        "seed": seed,
-        "output": output_path,
-        "removed_indices_1based": sorted(i + 1 for i in remove_indices),
-    }
-
-
-# ============================================================
-# LAMMPS data handling
-# ============================================================
-
-SECTION_NAMES = {
-    "Masses",
-    "Atoms",
-    "Velocities",
-    "Bonds",
-    "Angles",
-    "Dihedrals",
-    "Impropers",
-    "Pair Coeffs",
-    "Bond Coeffs",
-    "Angle Coeffs",
-    "Dihedral Coeffs",
-    "Improper Coeffs",
-}
-
-
-def find_section_indices(lines):
+def element_mass(elem):
     """
-    Return section name -> line index.
+    Return atomic mass from ASE database.
     """
-    sec = {}
+    if elem not in atomic_numbers:
+        die(f"Unknown element symbol: {elem}")
 
-    for i, line in enumerate(lines):
-        stripped = line.strip()
-
-        for name in SECTION_NAMES:
-            if stripped == name or stripped.startswith(name + " "):
-                sec[name] = i
-
-    return sec
+    z = atomic_numbers[elem]
+    return float(atomic_masses[z])
 
 
-def next_section_start(lines, start_idx):
+def ensure_lammps_masses(data_file, specorder):
     """
-    Find next section after start_idx.
+    Ensure LAMMPS data file has Masses section.
+
+    Also enforce the atom types count to be len(specorder).
+
+    This is a fallback/safety layer in case ASE version writes no Masses.
     """
-    for i in range(start_idx + 1, len(lines)):
-        stripped = lines[i].strip()
+    data_file = Path(data_file)
+    lines = data_file.read_text().splitlines()
 
-        for name in SECTION_NAMES:
-            if stripped == name or stripped.startswith(name + " "):
-                return i
-
-    return len(lines)
-
-
-def parse_lammps_header_counts(lines):
-    """
-    Parse header count lines:
-        384 atoms
-        2 atom types
-    """
-    atom_count_idx = None
-    atoms_count = None
-
-    for i, line in enumerate(lines):
-        s = line.strip()
-        m = re.match(r"^(\d+)\s+atoms\b", s)
-        if m:
-            atom_count_idx = i
-            atoms_count = int(m.group(1))
-            break
-
-    if atom_count_idx is None:
-        die("Could not find '<N> atoms' in LAMMPS data header.")
-
-    return atom_count_idx, atoms_count
-
-
-def parse_lammps_masses(lines, masses_idx):
-    """
-    Parse Masses section.
-
-    Requires element labels in comments:
-        1 63.546 # Cu
-
-    Returns:
-        type_to_element dict
-    """
-    end = next_section_start(lines, masses_idx)
-    type_to_element = {}
-
-    for i in range(masses_idx + 1, end):
-        s = lines[i].strip()
-
-        if not s or s.startswith("#"):
-            continue
-
-        if "#" not in s:
-            continue
-
-        left, comment = s.split("#", 1)
-        toks = left.split()
-
-        if len(toks) < 2:
-            continue
-
-        try:
-            atom_type = int(toks[0])
-        except Exception:
-            continue
-
-        elem = comment.strip().split()[0]
-
-        if not re.match(r"^[A-Z][a-z]?$", elem):
-            continue
-
-        type_to_element[atom_type] = elem
-
-    if not type_to_element:
-        die(
-            "Failed to parse element labels from Masses section. "
-            "Need comments like: 1 63.546 # Cu"
-        )
-
-    return type_to_element
-
-
-def parse_lammps_atoms(lines, atoms_idx):
-    """
-    Parse Atoms section lines.
-
-    We preserve each raw line but infer:
-        atom id = first column
-        atom type = detected column
-
-    Supported common styles:
-        atomic: id type x y z
-        charge: id type q x y z
-        full:   id mol type q x y z
-
-    Detection:
-        If Atoms line says '# atomic', '# charge', '# full', use it.
-        Otherwise infer:
-            len 5 -> atomic
-            len 6 -> charge
-            len >=7 -> full
-    """
-    section_header = lines[atoms_idx].strip().lower()
-    atom_style = None
-
-    if "#" in section_header:
-        atom_style = section_header.split("#", 1)[1].strip().split()[0]
-
-    end = next_section_start(lines, atoms_idx)
-
-    atom_rows = []
-    row_line_indices = []
-
-    for i in range(atoms_idx + 1, end):
-        raw = lines[i]
-
-        s = raw.strip()
-
-        if not s or s.startswith("#"):
-            continue
-
-        toks = s.split()
-
-        if len(toks) < 5:
-            continue
-
-        # Remove trailing inline comment for parsing.
-        if "#" in toks:
-            hash_idx = toks.index("#")
-            toks_parse = toks[:hash_idx]
-        else:
-            # safer split by '#'
-            toks_parse = s.split("#", 1)[0].split()
-
-        if len(toks_parse) < 5:
-            continue
-
-        try:
-            atom_id = int(toks_parse[0])
-        except Exception:
-            continue
-
-        if atom_style == "atomic":
-            type_col = 1
-        elif atom_style == "charge":
-            type_col = 1
-        elif atom_style == "full":
-            type_col = 2
-        else:
-            if len(toks_parse) == 5:
-                type_col = 1
-            elif len(toks_parse) == 6:
-                type_col = 1
-            else:
-                type_col = 2
-
-        try:
-            atom_type = int(toks_parse[type_col])
-        except Exception:
-            die(f"Could not parse atom type from atom line: {raw}")
-
-        atom_rows.append({
-            "line_index": i,
-            "raw": raw,
-            "tokens": toks_parse,
-            "atom_id": atom_id,
-            "atom_type": atom_type,
-        })
-
-        row_line_indices.append(i)
-
-    if not atom_rows:
-        die("No atom rows parsed from LAMMPS Atoms section.")
-
-    return atom_rows, atom_style
-
-
-def remove_lammps_atoms(input_path, element, num_remove, output_path, seed):
-    lines = Path(input_path).read_text().splitlines()
-
-    sections = find_section_indices(lines)
-
-    if "Masses" not in sections:
-        die("LAMMPS data file has no Masses section.")
-
-    if "Atoms" not in sections:
-        die("LAMMPS data file has no Atoms section.")
-
-    atom_count_idx, atoms_count = parse_lammps_header_counts(lines)
-
-    type_to_element = parse_lammps_masses(lines, sections["Masses"])
-
-    target_types = [
-        t for t, e in type_to_element.items()
-        if e == element
-    ]
-
-    if not target_types:
-        die(
-            f"Element {element} not found in Masses section. "
-            f"Available mapping: {type_to_element}"
-        )
-
-    atom_rows, atom_style = parse_lammps_atoms(lines, sections["Atoms"])
-
-    candidate_rows = [
-        row for row in atom_rows
-        if row["atom_type"] in target_types
-    ]
-
-    n_available = len(candidate_rows)
-
-    if num_remove > n_available:
-        die(f"Cannot remove {num_remove} {element}; only {n_available} available.")
-
-    rng = random.Random(seed)
-    chosen_rows = rng.sample(candidate_rows, num_remove)
-
-    remove_line_indices = set(row["line_index"] for row in chosen_rows)
-    removed_atom_ids = sorted(row["atom_id"] for row in chosen_rows)
-
+    # Fix atom types count if needed.
     new_lines = []
-    for i, line in enumerate(lines):
-        if i in remove_line_indices:
-            continue
 
-        if i == atom_count_idx:
-            old_line = line.strip()
-            new_count = atoms_count - num_remove
-            suffix = ""
-            if "#" in line:
-                suffix = " " + line.split("#", 1)[1]
-            new_lines.append(f"{new_count} atoms")
+    atom_types_fixed = False
+
+    for line in lines:
+        if re.match(r"^\s*\d+\s+atom\s+types\s*$", line):
+            new_lines.append(f"{len(specorder)} atom types")
+            atom_types_fixed = True
         else:
             new_lines.append(line)
 
-    # Remove corresponding velocities if Velocities section exists.
-    # Velocities format starts with atom id. Remove same atom ids.
-    if "Velocities" in sections:
-        # Since line indices changed after removing atom lines, easier second-pass.
-        new_lines = remove_lammps_velocities_by_ids(new_lines, set(removed_atom_ids))
+    lines = new_lines
 
-    Path(output_path).write_text("\n".join(new_lines) + "\n")
+    if not atom_types_fixed:
+        # Usually ASE writes this. If not, leave it alone.
+        pass
 
-    return {
-        "format": "lammps",
-        "element": element,
-        "removed": num_remove,
-        "available_before": n_available,
-        "seed": seed,
-        "output": output_path,
-        "removed_atom_ids": removed_atom_ids,
-        "target_types": target_types,
-        "atom_style": atom_style,
-    }
+    # If Masses already exists, do not insert again.
+    has_masses = any(line.strip().startswith("Masses") for line in lines)
 
+    if has_masses:
+        data_file.write_text("\n".join(lines) + "\n")
+        return
 
-def remove_lammps_velocities_by_ids(lines, remove_atom_ids):
-    """
-    Remove velocity rows for removed atom ids.
-    """
-    sections = find_section_indices(lines)
-
-    if "Velocities" not in sections:
-        return lines
-
-    v_idx = sections["Velocities"]
-    v_end = next_section_start(lines, v_idx)
-
-    new_lines = []
+    # Find Atoms section and insert Masses before it.
+    atoms_idx = None
 
     for i, line in enumerate(lines):
-        if v_idx < i < v_end:
-            s = line.strip()
+        if line.strip().startswith("Atoms"):
+            atoms_idx = i
+            break
 
-            if not s or s.startswith("#"):
-                new_lines.append(line)
-                continue
+    if atoms_idx is None:
+        die("Cannot find Atoms section in written LAMMPS data file.")
 
-            toks = s.split()
+    masses_block = []
+    masses_block.append("")
+    masses_block.append("Masses")
+    masses_block.append("")
 
-            try:
-                atom_id = int(toks[0])
-            except Exception:
-                new_lines.append(line)
-                continue
+    for i, elem in enumerate(specorder, start=1):
+        masses_block.append(f"{i} {element_mass(elem):.10f} # {elem}")
 
-            if atom_id in remove_atom_ids:
-                continue
+    masses_block.append("")
 
-        new_lines.append(line)
+    lines = lines[:atoms_idx] + masses_block + lines[atoms_idx:]
 
-    return new_lines
+    data_file.write_text("\n".join(lines) + "\n")
+
+
+# ============================================================
+# Read / Write
+# ============================================================
+
+def read_structure(input_file, input_format):
+    """
+    Read structure.
+    """
+    if input_format == "vasp":
+        return read(input_file, format="vasp")
+
+    if input_format == "lammps-data":
+        return read(
+            input_file,
+            format="lammps-data",
+            style="atomic"
+        )
+
+    die(f"Unsupported input format: {input_format}")
+
+
+def write_structure(output_file, atoms, output_format, specorder):
+    """
+    Write structure.
+
+    For LAMMPS:
+        Masses are written and checked.
+    """
+    if output_format == "vasp":
+        write(
+            output_file,
+            atoms,
+            format="vasp",
+            direct=True,
+            vasp5=True,
+            sort=False,
+        )
+        return
+
+    if output_format == "lammps-data":
+        atoms = sort_atoms_by_specorder(atoms, specorder)
+
+        try:
+            write(
+                output_file,
+                atoms,
+                format="lammps-data",
+                atom_style="atomic",
+                masses=True,
+                specorder=specorder,
+                units="metal",
+            )
+        except TypeError:
+            # Older ASE fallback.
+            print("[WARN] ASE writer did not accept masses=True. Writing first, then inserting Masses manually.")
+            write(
+                output_file,
+                atoms,
+                format="lammps-data",
+                atom_style="atomic",
+                specorder=specorder,
+                units="metal",
+            )
+
+        ensure_lammps_masses(output_file, specorder)
+        return
+
+    die(f"Unsupported output format: {output_format}")
+
+
+# ============================================================
+# Vacancy generation
+# ============================================================
+
+def generate_vacancy(
+    input_file,
+    element,
+    num_remove,
+    output_file=None,
+    seed=None,
+    input_format="auto",
+    output_format="auto",
+    specorder=None,
+    extra_elements=None,
+):
+    """
+    Generate random vacancies.
+    """
+    input_file = Path(input_file)
+
+    if not input_file.exists():
+        die(f"Input file not found: {input_file}")
+
+    if num_remove < 0:
+        die("num_remove must be non-negative.")
+
+    if input_format == "auto":
+        input_format = detect_input_format(input_file)
+
+    if output_file is None:
+        if output_format == "auto":
+            output_format = input_format
+
+        if output_format == "vasp":
+            output_file = f"POSCAR_del-{element}-{num_remove}"
+            if seed is not None:
+                output_file += f"_seed{seed}"
+
+        elif output_format == "lammps-data":
+            output_file = f"data_del-{element}-{num_remove}"
+            if seed is not None:
+                output_file += f"_seed{seed}"
+            output_file += ".lammps"
+
+        else:
+            die(f"Unsupported output format: {output_format}")
+
+    else:
+        if output_format == "auto":
+            output_format = detect_output_format(output_file, input_format)
+
+    print("========== Vacancy generation ==========")
+    print(f"Input file    : {input_file}")
+    print(f"Input format  : {input_format}")
+    print(f"Output file   : {output_file}")
+    print(f"Output format : {output_format}")
+    print(f"Remove element: {element}")
+    print(f"Remove count  : {num_remove}")
+    print(f"Seed          : {seed}")
+
+    atoms = read_structure(input_file, input_format)
+
+    symbols_before = atoms.get_chemical_symbols()
+
+    final_specorder = normalize_specorder(
+        specorder=specorder,
+        extra_elements=extra_elements,
+        symbols_before_delete=symbols_before,
+    )
+
+    print(f"Element/type order for LAMMPS: {final_specorder}")
+
+    if seed is None:
+        rng = random.Random()
+    else:
+        rng = random.Random(seed)
+
+    symbols = atoms.get_chemical_symbols()
+
+    candidate_indices = [
+        i for i, s in enumerate(symbols)
+        if s == element
+    ]
+
+    n_available = len(candidate_indices)
+
+    if n_available == 0:
+        die(f"No element '{element}' found in input structure.")
+
+    if num_remove > n_available:
+        die(
+            f"Cannot remove {num_remove} {element}; "
+            f"only {n_available} available."
+        )
+
+    remove_indices = sorted(
+        rng.sample(candidate_indices, num_remove),
+        reverse=True
+    )
+
+    print(f"Available {element}: {n_available}")
+    print(f"Removing atom indices, 0-based: {remove_indices}")
+
+    for idx in remove_indices:
+        del atoms[idx]
+
+    # Sort for clean LAMMPS type ordering or clean POSCAR grouping.
+    atoms = sort_atoms_by_specorder(atoms, final_specorder)
+
+    write_structure(
+        output_file=output_file,
+        atoms=atoms,
+        output_format=output_format,
+        specorder=final_specorder,
+    )
+
+    print("========== Summary ==========")
+    print(f"Final atom count : {len(atoms)}")
+    print(f"Removed count    : {num_remove}")
+    print(f"Saved to         : {output_file}")
+    print("[DONE]")
 
 
 # ============================================================
@@ -572,17 +427,17 @@ def remove_lammps_velocities_by_ids(lines, remove_atom_ids):
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Generate vacancies for VASP POSCAR or LAMMPS data files."
+        description="Generate vacancy structures for VASP or LAMMPS data."
     )
 
     parser.add_argument(
-        "input",
-        help="Input file: POSCAR/CONTCAR or LAMMPS data file."
+        "input_file",
+        help="Input file: POSCAR/CONTCAR or LAMMPS data."
     )
 
     parser.add_argument(
         "element",
-        help="Element to remove, e.g. Cu, Se, Ag."
+        help="Element to remove, e.g. Cu."
     )
 
     parser.add_argument(
@@ -593,23 +448,52 @@ def parse_args():
 
     parser.add_argument(
         "--format",
-        choices=["auto", "vasp", "lammps"],
+        dest="input_format",
+        choices=["auto", "vasp", "lammps-data"],
         default="auto",
-        help="Input format. Default: auto."
+        help="Input format. Default: auto. Kept for backward compatibility."
+    )
+
+    parser.add_argument(
+        "--output-format",
+        choices=["auto", "vasp", "lammps-data"],
+        default="auto",
+        help="Output format. Default: auto by output filename."
+    )
+
+    parser.add_argument(
+        "--specorder",
+        nargs="+",
+        default=None,
+        help=(
+            "LAMMPS element/type order. "
+            "Example: --specorder Cu Se Ag. "
+            "This must match pair_coeff order."
+        )
+    )
+
+    parser.add_argument(
+        "--extra-elements",
+        nargs="*",
+        default=None,
+        help=(
+            "Extra elements to reserve in LAMMPS Masses even if absent now. "
+            "Example: --extra-elements Ag."
+        )
     )
 
     parser.add_argument(
         "--seed",
         type=int,
-        default=677677,
-        help="Random seed. Default: 677677."
+        default=None,
+        help="Random seed."
     )
 
     parser.add_argument(
         "-o",
         "--output",
         default=None,
-        help="Output file name. Default: auto-generated."
+        help="Output filename."
     )
 
     return parser.parse_args()
@@ -618,66 +502,17 @@ def parse_args():
 def main():
     args = parse_args()
 
-    input_path = Path(args.input)
-
-    if not input_path.exists():
-        die(f"Input file not found: {input_path}")
-
-    if args.num_remove < 0:
-        die("num_remove must be non-negative.")
-
-    fmt = args.format
-
-    if fmt == "auto":
-        fmt = detect_format(input_path)
-
-    if args.output is None:
-        if fmt == "vasp":
-            output_path = f"POSCAR_del-{args.element}-{args.num_remove}_seed{args.seed}"
-        elif fmt == "lammps":
-            output_path = f"data_del-{args.element}-{args.num_remove}_seed{args.seed}.lammps"
-        else:
-            die(f"Unknown format: {fmt}")
-    else:
-        output_path = args.output
-
-    print("----- Vacancy Generation -----")
-    print(f"Input file   : {input_path}")
-    print(f"Format       : {fmt}")
-    print(f"Element      : {args.element}")
-    print(f"Remove count : {args.num_remove}")
-    print(f"Seed         : {args.seed}")
-    print(f"Output file  : {output_path}")
-
-    if args.num_remove == 0:
-        print("[WARN] num_remove = 0. No atom will be removed.")
-
-    if fmt == "vasp":
-        summary = remove_vasp_atoms(
-            input_path=input_path,
-            element=args.element,
-            num_remove=args.num_remove,
-            output_path=output_path,
-            seed=args.seed,
-        )
-
-    elif fmt == "lammps":
-        summary = remove_lammps_atoms(
-            input_path=input_path,
-            element=args.element,
-            num_remove=args.num_remove,
-            output_path=output_path,
-            seed=args.seed,
-        )
-
-    else:
-        die(f"Unsupported format: {fmt}")
-
-    print("----- Summary -----")
-    for k, v in summary.items():
-        print(f"{k:22s}: {v}")
-
-    print("[DONE] Vacancy structure generated.")
+    generate_vacancy(
+        input_file=args.input_file,
+        element=args.element,
+        num_remove=args.num_remove,
+        output_file=args.output,
+        seed=args.seed,
+        input_format=args.input_format,
+        output_format=args.output_format,
+        specorder=args.specorder,
+        extra_elements=args.extra_elements,
+    )
 
 
 if __name__ == "__main__":
